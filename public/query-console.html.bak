@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>查询控制台 - 数据库管理工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.11.5/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #0d6efd;
+            --success-color: #198754;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --info-color: #0dcaf0;
+        }
+
+        body {
+            background-color: #f8f9fa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .navbar {
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        }
+
+        .main-container {
+            height: calc(100vh - 56px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            background-color: #fff;
+            border-bottom: 1px solid #dee2e6;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .editor-container {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+
+        .sidebar {
+            width: 300px;
+            background-color: #fff;
+            border-right: 1px solid #dee2e6;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid #dee2e6;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .editor-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .editor-header {
+            background-color: #2d3748;
+            color: white;
+            padding: 0.5rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .CodeMirror {
+            height: 100%;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .result-area {
+            height: 300px;
+            background-color: #fff;
+            border-top: 1px solid #dee2e6;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .result-tabs {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+        }
+
+        .result-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .datasource-item {
+            padding: 0.75rem;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .datasource-item:hover {
+            background-color: #f8f9fa;
+            border-color: var(--primary-color);
+        }
+
+        .datasource-item.active {
+            background-color: rgba(13, 110, 253, 0.1);
+            border-color: var(--primary-color);
+        }
+
+        .datasource-type {
+            display: inline-block;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            margin-left: 0.5rem;
+        }
+
+        .datasource-type.mysql {
+            background-color: #00758f;
+            color: white;
+        }
+
+        .datasource-type.postgresql {
+            background-color: #336791;
+            color: white;
+        }
+
+        .datasource-type.mongodb {
+            background-color: #47a248;
+            color: white;
+        }
+
+        .datasource-type.redis {
+            background-color: #dc382d;
+            color: white;
+        }
+
+        .database-item {
+            padding: 0.5rem 0.75rem;
+            margin-left: 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .database-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .database-item.active {
+            background-color: rgba(13, 110, 253, 0.1);
+            color: var(--primary-color);
+        }
+
+        .table-item {
+            padding: 0.375rem 0.75rem;
+            margin-left: 2rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-size: 0.875rem;
+        }
+
+        .table-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+
+        .status-indicator.connected {
+            background-color: var(--success-color);
+        }
+
+        .status-indicator.disconnected {
+            background-color: var(--danger-color);
+        }
+
+        .execution-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+
+        .btn-group .btn {
+            border-radius: 4px;
+        }
+
+        .dropdown-menu {
+            min-width: 200px;
+        }
+
+        .dropdown-item i {
+            width: 16px;
+            margin-right: 8px;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner {
+            width: 3rem;
+            height: 3rem;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .query-history {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .history-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .history-item .timestamp {
+            color: #6c757d;
+            font-size: 0.75rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #6c757d;
+        }
+
+        .empty-state i {
+            font-size: 2rem;
+            color: #dee2e6;
+            margin-bottom: 0.5rem;
+        }
+
+        .table-responsive {
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .table thead th {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+            font-weight: 500;
+        }
+
+        .execution-plan {
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.875rem;
+        }
+
+        .modal-header {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .file-drop-area {
+            border: 2px dashed #dee2e6;
+            border-radius: 6px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .file-drop-area:hover,
+        .file-drop-area.drag-over {
+            border-color: var(--primary-color);
+            background-color: rgba(13, 110, 253, 0.05);
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="index.html">
+                <i class="fas fa-database"></i> 数据库管理工具
+            </a>
+            <div class="navbar-nav ms-auto">
+                <div class="nav-item">
+                    <a class="nav-link" href="datasource-manager.html">
+                        <i class="fas fa-server"></i> 数据源管理
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a class="nav-link active" href="#">
+                        <i class="fas fa-terminal"></i> 查询控制台
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a class="nav-link" href="#" onclick="showSettings()">
+                        <i class="fas fa-cog"></i> 设置
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <!-- 工具栏 -->
+        <div class="toolbar">
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="executeQuery()">
+                    <i class="fas fa-play"></i> 执行查询
+                </button>
+                <button class="btn btn-outline-primary" onclick="explainQuery()">
+                    <i class="fas fa-info-circle"></i> 执行计划
+                </button>
+                <button class="btn btn-outline-primary" onclick="formatQuery()">
+                    <i class="fas fa-magic"></i> 格式化
+                </button>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-outline-secondary" onclick="runSqlFile()">
+                    <i class="fas fa-file-upload"></i> 运行SQL文件
+                </button>
+                <button class="btn btn-outline-secondary" onclick="saveQuery()">
+                    <i class="fas fa-save"></i> 保存查询
+                </button>
+                <button class="btn btn-outline-secondary" onclick="clearEditor()">
+                    <i class="fas fa-eraser"></i> 清空
+                </button>
+            </div>
+
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                    <i class="fas fa-tools"></i> 数据源操作
+                </button>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item" href="#" onclick="createDatabase()">
+                        <i class="fas fa-plus"></i> 新建数据库
+                    </a></li>
+                    <li><a class="dropdown-item" href="#" onclick="editDatasource()">
+                        <i class="fas fa-edit"></i> 编辑连接信息
+                    </a></li>
+                    <li><a class="dropdown-item" href="#" onclick="copyDatasourceName()">
+                        <i class="fas fa-copy"></i> 复制连接名称
+                    </a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item text-danger" href="#" onclick="removeDatasource()">
+                        <i class="fas fa-trash"></i> 删除数据源
+                    </a></li>
+                </ul>
+            </div>
+
+            <div class="ms-auto execution-info">
+                <span id="currentDatasource">未选择数据源</span>
+                <span id="executionTime"></span>
+                <span id="rowCount"></span>
+            </div>
+        </div>
+
+        <div class="editor-container">
+            <!-- 左侧边栏 -->
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h6 class="mb-0">
+                        <i class="fas fa-database"></i> 数据源
+                    </h6>
+                </div>
+                <div class="sidebar-content" id="datasourceList">
+                    <div class="empty-state">
+                        <i class="fas fa-plug"></i>
+                        <div>无可用数据源</div>
+                        <small class="text-muted">请先连接数据源</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 编辑器区域 -->
+            <div class="editor-area">
+                <div class="editor-header">
+                    <span>
+                        <i class="fas fa-code"></i> SQL 编辑器
+                    </span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-light" onclick="toggleHistory()">
+                            <i class="fas fa-history"></i> 历史记录
+                        </button>
+                    </div>
+                </div>
+                <textarea id="sqlEditor" placeholder="请选择数据源后输入SQL查询..."></textarea>
+            </div>
+        </div>
+
+        <!-- 结果区域 -->
+        <div class="result-area">
+            <div class="result-tabs">
+                <ul class="nav nav-tabs" role="tablist">
+                    <li class="nav-item">
+                        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#resultTab">
+                            <i class="fas fa-table"></i> 查询结果
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#messageTab">
+                            <i class="fas fa-message"></i> 消息
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#historyTab">
+                            <i class="fas fa-history"></i> 历史记录
+                        </button>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="resultTab">
+                    <div class="result-content" id="resultContent">
+                        <div class="empty-state">
+                            <i class="fas fa-table"></i>
+                            <div>暂无查询结果</div>
+                            <small class="text-muted">执行SQL查询后将在此显示结果</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="messageTab">
+                    <div class="result-content" id="messageContent">
+                        <div class="empty-state">
+                            <i class="fas fa-message"></i>
+                            <div>暂无消息</div>
+                            <small class="text-muted">系统消息将在此显示</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="historyTab">
+                    <div class="result-content">
+                        <div class="query-history" id="queryHistory">
+                            <div class="empty-state">
+                                <i class="fas fa-history"></i>
+                                <div>暂无历史记录</div>
+                                <small class="text-muted">执行的查询将在此显示</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载覆盖层 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- 运行SQL文件模态框 -->
+    <div class="modal fade" id="runSqlFileModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">运行SQL文件</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="file-drop-area" id="fileDropArea" onclick="document.getElementById('sqlFileInput').click()">
+                        <i class="fas fa-cloud-upload-alt fa-2x mb-3 text-muted"></i>
+                        <h6>拖拽SQL文件到此处或点击选择</h6>
+                        <small class="text-muted">支持 .sql 文件</small>
+                        <input type="file" id="sqlFileInput" accept=".sql" style="display: none;">
+                    </div>
+                    <div class="mt-3" id="fileInfo" style="display: none;">
+                        <small class="text-muted">已选择文件: <span id="fileName"></span></small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="executeSqlFile()" id="executeFileBtn" disabled>
+                        <i class="fas fa-play"></i> 执行文件
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建数据库模态框 -->
+    <div class="modal fade" id="createDatabaseModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">新建数据库</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createDatabaseForm">
+                        <div class="mb-3">
+                            <label class="form-label">数据库名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="databaseName" required>
+                            <div class="form-text">数据库名称只能包含字母、数字和下划线</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">字符集</label>
+                            <select class="form-select" id="databaseCharset">
+                                <option value="utf8mb4">utf8mb4 (推荐)</option>
+                                <option value="utf8">utf8</option>
+                                <option value="latin1">latin1</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">排序规则</label>
+                            <select class="form-select" id="databaseCollation">
+                                <option value="utf8mb4_unicode_ci">utf8mb4_unicode_ci</option>
+                                <option value="utf8mb4_general_ci">utf8mb4_general_ci</option>
+                                <option value="utf8_general_ci">utf8_general_ci</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="createNewDatabase()">
+                        <i class="fas fa-plus"></i> 创建
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 保存查询模态框 -->
+    <div class="modal fade" id="saveQueryModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">保存查询</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="saveQueryForm">
+                        <div class="mb-3">
+                            <label class="form-label">查询名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="queryName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">描述</label>
+                            <textarea class="form-control" id="queryDescription" rows="2"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">标签</label>
+                            <input type="text" class="form-control" id="queryTags" placeholder="用逗号分隔多个标签">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveQueryToFile()">
+                        <i class="fas fa-save"></i> 保存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/sql/sql.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/hint/show-hint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/hint/sql-hint.min.js"></script>
+    <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
+    <script src="js/query-console.js"></script>
+</body>
+</html>

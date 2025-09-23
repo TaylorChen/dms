@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据库管理工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.11.5/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="css/main.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- 顶部导航栏 -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#">
+                    <i class="fas fa-database"></i> 数据库管理工具
+                </a>
+                <div class="navbar-nav ms-auto">
+                    <div class="nav-item">
+                        <a class="nav-link" href="datasource-manager.html">
+                            <i class="fas fa-server"></i> 数据源管理
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link" href="#" onclick="if(typeof showSettings === 'function') showSettings()">
+                            <i class="fas fa-cog"></i> 设置
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 移动端侧边栏遮罩层 -->
+        <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+        <!-- 移动端侧边栏切换按钮 -->
+        <button class="mobile-sidebar-toggle" onclick="toggleSidebar()">
+            <i class="fas fa-bars"></i>
+        </button>
+
+        <!-- 主要内容区域 -->
+        <div class="row mt-3">
+            <!-- 左侧边栏 -->
+            <div class="col-lg-3 col-md-4 sidebar">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <h5 class="card-title mb-0">
+                                <i class="fas fa-server"></i> 数据库连接
+                            </h5>
+                            <button class="btn-close d-lg-none" onclick="toggleSidebar()"></button>
+                        </div>
+                        <div class="btn-group btn-group-sm flex-wrap">
+                            <button class="btn btn-success" onclick="showNewConnectionModal()">
+                                <i class="fas fa-plus"></i> 新建连接
+                            </button>
+                            <button class="btn btn-outline-primary" onclick="if(typeof showNewGroupModal === 'function') showNewGroupModal()">
+                                <i class="fas fa-folder-plus"></i> 新建分组
+                            </button>
+                            <button class="btn btn-outline-info" onclick="if(typeof showConnectionStats === 'function') showConnectionStats()" title="连接统计">
+                                <i class="fas fa-chart-bar"></i>
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="if(typeof refreshConnections === 'function') refreshConnections()">
+                                <i class="fas fa-sync"></i>
+                            </button>
+                            <button class="btn btn-outline-warning" onclick="if(typeof addTestConnections === 'function') addTestConnections()" title="添加测试连接">
+                                <i class="fas fa-bug"></i>
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="if(typeof testLibraries === 'function') testLibraries()" title="测试库">
+                                <i class="fas fa-flask"></i>
+                            </button>
+                            <button class="btn btn-outline-info" onclick="simpleModalTest()" title="简单测试">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            </div>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- 连接分类筛选 -->
+                        <div class="mb-3">
+                            <select class="form-select form-select-sm" id="connectionFilter" onchange="if(typeof filterConnections === 'function') filterConnections()">
+                                <option value="all">所有连接</option>
+                                <option value="mysql">MySQL</option>
+                                <option value="postgresql">PostgreSQL</option>
+                                <option value="mongodb">MongoDB</option>
+                                <option value="redis">Redis</option>
+                                <option value="active">已连接</option>
+                                <option value="inactive">未连接</option>
+                            </select>
+                        </div>
+                        <div id="connectionList">
+                            <!-- 连接列表将在这里动态加载 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据库结构浏览器 -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5 class="card-title">
+                            <i class="fas fa-sitemap"></i> 数据库结构
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="databaseExplorer">
+                            <div class="text-muted text-center">
+                                请先连接数据库
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧主内容区 -->
+            <div class="col-lg-9 col-md-8 main-content">
+                <!-- 标签页 -->
+                <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="query-tab" data-bs-toggle="tab" data-bs-target="#query" type="button" role="tab">
+                            <i class="fas fa-code"></i> SQL查询
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="data-tab" data-bs-toggle="tab" data-bs-target="#data" type="button" role="tab">
+                            <i class="fas fa-table"></i> 数据查看
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="structure-tab" data-bs-toggle="tab" data-bs-target="#structure" type="button" role="tab">
+                            <i class="fas fa-cogs"></i> 表结构
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="import-tab" data-bs-toggle="tab" data-bs-target="#import" type="button" role="tab">
+                            <i class="fas fa-upload"></i> 导入/导出
+                        </button>
+                    </li>
+                </ul>
+
+                <!-- 标签页内容 -->
+                <div class="tab-content mt-3" id="mainTabContent">
+                    <!-- SQL查询标签页 -->
+                    <div class="tab-pane fade show active" id="query" role="tabpanel">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="card-title mb-0 d-flex align-items-center justify-content-between">
+                                <span>SQL查询编辑器</span>
+                                <div class="btn-group btn-group-sm sql-editor-toolbar flex-wrap">
+                                    <button class="btn btn-success" onclick="executeQuery()" title="执行SQL (F5)">
+                                        <i class="fas fa-play"></i> 执行
+                                    </button>
+                                    <button class="btn btn-outline-primary" onclick="executeSelectedSQL()" title="执行选中内容">
+                                        <i class="fas fa-play-circle"></i> 执行选中
+                                    </button>
+                                    <button class="btn btn-outline-secondary" onclick="clearSQLEditor()" title="清空编辑器">
+                                        <i class="fas fa-eraser"></i> 清空
+                                    </button>
+                                    <div class="btn-group">
+                                        <button class="btn btn-outline-info dropdown-toggle" data-bs-toggle="dropdown">
+                                            <i class="fas fa-magic"></i> 格式化
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="formatSQL()">快速格式化</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showSQLFormatModal()">格式化设置</a></li>
+                                        </ul>
+                                    </div>
+                                    <div class="btn-group">
+                                        <button class="btn btn-outline-warning dropdown-toggle" data-bs-toggle="dropdown">
+                                            <i class="fas fa-save"></i> 脚本
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="saveSQLScript()">保存脚本</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showSQLScriptModal()">管理脚本</a></li>
+                                        </ul>
+                                    </div>
+                                    <div class="btn-group">
+                                        <button class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+                                            <i class="fas fa-sync"></i> 数据同步
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="showDataSyncModal()">数据同步与比较</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="quickDataSync()">快速同步</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showDataCompareModal()">仅比较数据</a></li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showSyncHistory()">同步历史</a></li>
+                                        </ul>
+                                    </div>
+                                    <button class="btn btn-outline-info" onclick="showSQLExplain()" title="执行计划分析">
+                                        <i class="fas fa-chart-line"></i> 执行计划
+                                    </button>
+                                    </div>
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <div class="mb-3">
+                                            <label class="form-label">数据库连接</label>
+                                            <select class="form-select" id="currentConnection" onchange="onConnectionChange()">
+                                                <option value="">选择数据库连接</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="mb-3">
+                                            <label class="form-label">当前数据库</label>
+                                            <select class="form-select" id="currentDatabase" onchange="onDatabaseChange()">
+                                                <option value="">请先选择连接</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="mb-3">
+                                            <label class="form-label">编辑器主题</label>
+                                            <select class="form-select" id="editorTheme" onchange="changeEditorTheme()">
+                                                <option value="textmate">TextMate</option>
+                                                <option value="monokai">Monokai</option>
+                                                <option value="github">GitHub</option>
+                                                <option value="tomorrow">Tomorrow</option>
+                                                <option value="twilight">Twilight</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="sqlEditor" class="sql-editor-container"></div>
+                                <div class="mt-3">
+                                    <h6>参数绑定</h6>
+                                    <div id="parametersContainer">
+                                        <div class="input-group mb-2">
+                                            <span class="input-group-text">参数</span>
+                                            <input type="text" class="form-control" placeholder="参数名">
+                                            <span class="input-group-text">值</span>
+                                            <input type="text" class="form-control" placeholder="参数值">
+                                            <button class="btn btn-outline-danger" onclick="removeParameter(this)">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-outline-primary btn-sm" onclick="addParameter()">
+                                        <i class="fas fa-plus"></i> 添加参数
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 查询结果 -->
+                        <div class="card mt-3" id="queryResultsCard" style="display: none;">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="card-title mb-0">查询结果</h5>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="exportResults('json')">
+                                        <i class="fas fa-download"></i> 导出JSON
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="exportResults('csv')">
+                                        <i class="fas fa-download"></i> 导出CSV
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div id="queryResults" class="data-table-container"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 数据查看标签页 -->
+                    <div class="tab-pane fade" id="data" role="tabpanel">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title">数据浏览器</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <select class="form-select" id="tableSelector">
+                                            <option value="">选择表</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="searchInput" placeholder="搜索...">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button class="btn btn-primary" onclick="loadTableData()">
+                                            <i class="fas fa-refresh"></i> 刷新数据
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="dataTableContainer">
+                                    <div class="text-muted text-center">
+                                        请选择要查看的表
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 表结构标签页 -->
+                    <div class="tab-pane fade" id="structure" role="tabpanel">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title">表结构管理</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row mb-3">
+                                    <div class="col-md-8">
+                                        <select class="form-select" id="structureTableSelector">
+                                            <option value="">选择表</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="btn-group w-100" role="group">
+                                            <button class="btn btn-outline-secondary" id="testBtn">
+                                                <i class="fas fa-bug"></i> 测试
+                                            </button>
+                                            <button class="btn btn-primary" id="loadStructureBtn" disabled>
+                                                <i class="fas fa-search"></i> 查看表结构
+                                            </button>
+                                            <button class="btn btn-success" id="createTableBtn">
+                                                <i class="fas fa-plus"></i> 新建表
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="tableStructureContainer">
+                                    <div class="text-muted text-center">
+                                        请选择要查看的表
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 导入导出标签页 -->
+                    <div class="tab-pane fade" id="import" role="tabpanel">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5 class="card-title">数据导入</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">选择文件</label>
+                                            <input type="file" class="form-control" id="importFile" accept=".csv,.json">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">目标表</label>
+                                            <input type="text" class="form-control" id="importTargetTable" placeholder="输入表名">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">导入格式</label>
+                                            <select class="form-select" id="importFormat">
+                                                <option value="csv">CSV</option>
+                                                <option value="json">JSON</option>
+                                            </select>
+                                        </div>
+                                        <button class="btn btn-primary" onclick="importData()">
+                                            <i class="fas fa-upload"></i> 开始导入
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5 class="card-title">数据导出</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">源表</label>
+                                            <select class="form-select" id="exportSourceTable">
+                                                <option value="">选择表</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">导出格式</label>
+                                            <select class="form-select" id="exportFormat">
+                                                <option value="csv">CSV</option>
+                                                <option value="json">JSON</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">导出条件</label>
+                                            <textarea class="form-control" id="exportWhereClause" rows="3" placeholder="WHERE条件（可选）"></textarea>
+                                        </div>
+                                        <button class="btn btn-success" onclick="exportData()">
+                                            <i class="fas fa-download"></i> 导出数据
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建连接模态框 -->
+    <div class="modal fade" id="newConnectionModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">新建数据库连接</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="connectionForm">
+                        <div class="mb-3">
+                            <label class="form-label">连接名称 <small class="text-muted">(可选)</small></label>
+                            <input type="text" class="form-control" id="connectionName" placeholder="例如：本地MySQL">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">数据库类型</label>
+                            <select class="form-select" id="dbType" onchange="if(typeof updateConnectionForm === 'function') updateConnectionForm()">
+                                <option value="mysql">MySQL</option>
+                                <option value="postgresql">PostgreSQL</option>
+                                <option value="mongodb">MongoDB</option>
+                                <option value="redis">Redis</option>
+                            </select>
+                        </div>
+                        <div id="connectionFormFields">
+                            <!-- 连接字段将根据数据库类型动态生成 -->
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">所属分组</label>
+                            <select class="form-select" id="connectionGroup">
+                                <option value="">无分组</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="saveConnection" checked>
+                                <label class="form-check-label" for="saveConnection">
+                                    保存连接配置
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- 高级选项 -->
+                        <div class="mb-3">
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#advancedOptions">
+                                <i class="fas fa-cog"></i> 高级选项
+                            </button>
+                        </div>
+
+                        <div class="collapse" id="advancedOptions">
+                            <div class="card card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">连接超时 (秒)</label>
+                                    <input type="number" class="form-control" id="connectionTimeout" value="30" min="5" max="300">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">字符集</label>
+                                    <select class="form-select" id="charset">
+                                        <option value="utf8">UTF-8</option>
+                                        <option value="utf8mb4">UTF-8MB4</option>
+                                        <option value="gbk">GBK</option>
+                                        <option value="latin1">Latin1</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">连接池大小</label>
+                                    <input type="number" class="form-control" id="poolSize" value="10" min="1" max="100">
+                                </div>
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="autoReconnect">
+                                        <label class="form-check-label" for="autoReconnect">
+                                            自动重连
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="testConnection()">测试连接</button>
+                    <button type="button" class="btn btn-success" onclick="createConnection()">连接数据库</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建表模态框 -->
+    <div class="modal fade" id="createTableModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">新建表</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createTableForm">
+                        <div class="mb-3">
+                            <label class="form-label">表名</label>
+                            <input type="text" class="form-control" id="newTableName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">列定义</label>
+                            <div id="columnsContainer">
+                                <div class="column-definition row mb-2">
+                                    <div class="col-md-3">
+                                        <input type="text" class="form-control" placeholder="列名" required>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <select class="form-select">
+                                            <option value="VARCHAR">VARCHAR</option>
+                                            <option value="INT">INT</option>
+                                            <option value="TEXT">TEXT</option>
+                                            <option value="DATE">DATE</option>
+                                            <option value="DATETIME">DATETIME</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="text" class="form-control" placeholder="长度">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="nullableCheck">
+                                            <label class="form-check-label" for="nullableCheck">可空</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="primaryKeyCheck">
+                                            <label class="form-check-label" for="primaryKeyCheck">主键</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1">
+                                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeColumn(this)">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="addColumn()">
+                                <i class="fas fa-plus"></i> 添加列
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="createTable()">创建表</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 连接测试结果模态框 -->
+    <div class="modal fade" id="connectionTestModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">连接测试结果</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="connectionTestResult"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建分组模态框 -->
+    <div class="modal fade" id="newGroupModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">新建连接分组</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="groupForm">
+                        <div class="mb-3">
+                            <label class="form-label">分组名称</label>
+                            <input type="text" class="form-control" id="groupName" placeholder="输入分组名称" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">分组描述</label>
+                            <textarea class="form-control" id="groupDescription" rows="3" placeholder="输入分组描述（可选）"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">图标颜色</label>
+                            <select class="form-select" id="groupColor">
+                                <option value="primary">蓝色</option>
+                                <option value="success">绿色</option>
+                                <option value="warning">黄色</option>
+                                <option value="danger">红色</option>
+                                <option value="info">青色</option>
+                                <option value="secondary">灰色</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveGroup()">保存分组</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据导入模态框 -->
+    <div class="modal fade" id="dataImportModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">数据导入</h5>
+                </div>
+                <div class="modal-body">
+                    <form id="dataImportForm">
+                        <div class="mb-3">
+                            <label class="form-label">目标表</label>
+                            <select class="form-select" id="importTargetTable" required>
+                                <option value="">选择目标表</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">文件格式</label>
+                            <select class="form-select" id="importFormat" onchange="if(typeof updateImportOptions === 'function') updateImportOptions()">
+                                <option value="csv">CSV</option>
+                                <option value="json">JSON</option>
+                                <option value="excel">Excel</option>
+                                <option value="xml">XML</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">选择文件</label>
+                            <input type="file" class="form-control" id="importFile" accept=".csv,.json,.xlsx,.xls,.xml" required>
+                        </div>
+
+                        <!-- CSV选项 -->
+                        <div id="csvOptions" class="import-options">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">分隔符</label>
+                                        <select class="form-select" id="csvDelimiter">
+                                            <option value=",">逗号 (,)</option>
+                                            <option value=";">分号 (;)</option>
+                                            <option value="\t">制表符</option>
+                                            <option value="|">竖线 (|)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">编码</label>
+                                        <select class="form-select" id="csvEncoding">
+                                            <option value="utf8">UTF-8</option>
+                                            <option value="gbk">GBK</option>
+                                            <option value="utf16">UTF-16</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="csvHeaderRow" checked>
+                                    <label class="form-check-label" for="csvHeaderRow">
+                                        第一行为标题行
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 导入选项 -->
+                        <div class="mb-3">
+                            <label class="form-label">导入模式</label>
+                            <select class="form-select" id="importMode">
+                                <option value="insert">插入新记录</option>
+                                <option value="replace">替换表数据</option>
+                                <option value="update">更新匹配记录</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="importTruncateTable">
+                                <label class="form-check-label" for="importTruncateTable">
+                                    导入前清空表数据
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="importIgnoreErrors" checked>
+                                <label class="form-check-label" for="importIgnoreErrors">
+                                    忽略错误继续导入
+                                </label>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="startDataImport()">开始导入</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据导出模态框 -->
+    <div class="modal fade" id="dataExportModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">数据导出</h5>
+                </div>
+                <div class="modal-body">
+                    <form id="dataExportForm">
+                        <div class="mb-3">
+                            <label class="form-label">数据源</label>
+                            <select class="form-select" id="exportSource" onchange="if(typeof updateExportSource === 'function') updateExportSource()">
+                                <option value="table">表数据</option>
+                                <option value="query">查询结果</option>
+                            </select>
+                        </div>
+
+                        <div id="tableExportOptions">
+                            <div class="mb-3">
+                                <label class="form-label">选择表</label>
+                                <select class="form-select" id="exportTable" required>
+                                    <option value="">选择要导出的表</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="queryExportOptions" style="display: none;">
+                            <div class="mb-3">
+                                <label class="form-label">SQL查询</label>
+                                <textarea class="form-control" id="exportQuery" rows="4" placeholder="输入SELECT查询语句..."></textarea>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">导出格式</label>
+                            <select class="form-select" id="exportFormat" onchange="if(typeof updateExportOptions === 'function') updateExportOptions()">
+                                <option value="csv">CSV</option>
+                                <option value="json">JSON</option>
+                                <option value="excel">Excel</option>
+                                <option value="sql">SQL INSERT语句</option>
+                                <option value="xml">XML</option>
+                            </select>
+                        </div>
+
+                        <!-- CSV导出选项 -->
+                        <div id="csvExportOptions" class="export-options">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">分隔符</label>
+                                        <select class="form-select" id="exportCsvDelimiter">
+                                            <option value=",">逗号 (,)</option>
+                                            <option value=";">分号 (;)</option>
+                                            <option value="\t">制表符</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">编码</label>
+                                        <select class="form-select" id="exportCsvEncoding">
+                                            <option value="utf8">UTF-8</option>
+                                            <option value="gbk">GBK</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="exportCsvHeader" checked>
+                                    <label class="form-check-label" for="exportCsvHeader">
+                                        包含标题行
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 高级选项 -->
+                        <div class="mb-3">
+                            <label class="form-label">行数限制</label>
+                            <input type="number" class="form-control" id="exportRowLimit" placeholder="留空导出所有数据" min="1">
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="exportIncludeSchema">
+                                <label class="form-check-label" for="exportIncludeSchema">
+                                    包含表结构信息
+                                </label>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="startDataExport()">开始导出</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SQL脚本模态框 -->
+    <div class="modal fade" id="sqlScriptModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">SQL脚本管理</h5>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6>保存的脚本</h6>
+                            <button class="btn btn-sm btn-outline-primary" onclick="createNewScript()">
+                                <i class="fas fa-plus"></i> 新建脚本
+                            </button>
+                        </div>
+                        <div class="list-group mt-2" id="savedScriptsList">
+                            <!-- 动态加载保存的脚本 -->
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SQL格式化设置模态框 -->
+    <div class="modal fade" id="sqlFormatModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">SQL格式化设置</h5>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">缩进大小</label>
+                        <select class="form-select" id="formatIndentSize">
+                            <option value="2">2 空格</option>
+                            <option value="4" selected>4 空格</option>
+                            <option value="8">8 空格</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">关键字大小写</label>
+                        <select class="form-select" id="formatKeywordCase">
+                            <option value="upper">大写</option>
+                            <option value="lower">小写</option>
+                            <option value="preserve" selected>保持原样</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="formatCommaBefore" checked>
+                            <label class="form-check-label" for="formatCommaBefore">
+                                逗号前置
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="applySQLFormat()">应用格式化</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 连接属性模态框 -->
+    <div class="modal fade" id="connectionPropertiesModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">连接属性</h5>
+                </div>
+                <div class="modal-body">
+                    <form id="connectionPropertiesForm">
+                        <!-- 基本信息 -->
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">连接名称</label>
+                                <input type="text" class="form-control" id="propConnectionName" readonly>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">数据库类型</label>
+                                <input type="text" class="form-control" id="propConnectionType" readonly>
+                            </div>
+                        </div>
+
+                        <!-- 连接配置 -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">连接配置</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="row mb-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">主机</label>
+                                        <input type="text" class="form-control" id="propHost" readonly>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">端口</label>
+                                        <input type="text" class="form-control" id="propPort" readonly>
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">用户名</label>
+                                        <input type="text" class="form-control" id="propUser" readonly>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">数据库</label>
+                                        <input type="text" class="form-control" id="propDatabase" readonly>
+                                    </div>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">连接URL</label>
+                                    <input type="text" class="form-control" id="propUrl" readonly>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 高级设置 -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">高级设置</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">连接超时（秒）</label>
+                                    <input type="number" class="form-control" id="propTimeout" min="1" max="300" value="30">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">最大连接数</label>
+                                    <input type="number" class="form-control" id="propMaxConnections" min="1" max="100" value="10">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">字符集</label>
+                                    <select class="form-select" id="propCharset">
+                                        <option value="utf8">UTF-8</option>
+                                        <option value="utf8mb4">UTF-8 MB4</option>
+                                        <option value="latin1">Latin1</option>
+                                        <option value="gbk">GBK</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">时区</label>
+                                    <select class="form-select" id="propTimezone">
+                                        <option value="+00:00">UTC</option>
+                                        <option value="+08:00">UTC+8</option>
+                                        <option value="+09:00">UTC+9</option>
+                                        <option value="-05:00">UTC-5</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 连接池设置 -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">连接池设置</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="propUseConnectionPool">
+                                        <label class="form-check-label" for="propUseConnectionPool">
+                                            启用连接池
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">最小连接数</label>
+                                        <input type="number" class="form-control" id="propMinConnections" min="0" max="50" value="2">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">最大连接数</label>
+                                        <input type="number" class="form-control" id="propPoolMaxConnections" min="1" max="100" value="10">
+                                    </div>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">连接空闲时间（秒）</label>
+                                    <input type="number" class="form-control" id="propIdleTimeout" min="1" max="3600" value="300">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SSL设置 -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">SSL设置</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="propUseSSL">
+                                        <label class="form-check-label" for="propUseSSL">
+                                            启用SSL连接
+                                        </label>
+                                    </div>
+                                </div>
+                                <div id="sslOptions" style="display: none;">
+                                    <div class="mb-2">
+                                        <label class="form-label">SSL证书文件</label>
+                                        <input type="file" class="form-control" id="propSSLCert">
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">SSL密钥文件</label>
+                                        <input type="file" class="form-control" id="propSSLKey">
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">CA证书文件</label>
+                                        <input type="file" class="form-control" id="propSSLCA">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SSH隧道配置 -->
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">SSH隧道配置</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="propUseSSHTunnel">
+                                        <label class="form-check-label" for="propUseSSHTunnel">
+                                            启用SSH隧道
+                                        </label>
+                                    </div>
+                                </div>
+                                <div id="sshTunnelOptions" style="display: none;">
+                                    <div class="row mb-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">SSH主机</label>
+                                            <input type="text" class="form-control" id="propSSHHost" placeholder="ssh.example.com">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">SSH端口</label>
+                                            <input type="number" class="form-control" id="propSSHPort" value="22" min="1" max="65535">
+                                        </div>
+                                    </div>
+                                    <div class="row mb-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">SSH用户名</label>
+                                            <input type="text" class="form-control" id="propSSHUser" placeholder="username">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">认证方式</label>
+                                            <select class="form-select" id="propSSHAuthMethod">
+                                                <option value="password">密码</option>
+                                                <option value="key">密钥文件</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2" id="sshPasswordGroup">
+                                        <label class="form-label">SSH密码</label>
+                                        <input type="password" class="form-control" id="propSSHPassword">
+                                    </div>
+                                    <div class="mb-2" id="sshKeyGroup" style="display: none;">
+                                        <label class="form-label">SSH私钥文件</label>
+                                        <input type="file" class="form-control" id="propSSHKeyFile">
+                                        <div class="form-text">支持PEM格式的私钥文件</div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">本地端口</label>
+                                        <input type="number" class="form-control" id="propSSHTunnelLocalPort" value="0" min="0" max="65535">
+                                        <div class="form-text">设置为0将自动分配可用端口</div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">远程主机</label>
+                                        <input type="text" class="form-control" id="propSSHTunnelRemoteHost" placeholder="localhost">
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">远程端口</label>
+                                        <input type="number" class="form-control" id="propSSHTunnelRemotePort" value="3306" min="1" max="65535">
+                                    </div>
+                                    <div class="mb-2">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="propSSHKeepAlive">
+                                            <label class="form-check-label" for="propSSHKeepAlive">
+                                                保持连接活跃
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="saveConnectionProperties()">保存设置</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据同步比较模态框 -->
+    <div class="modal fade" id="dataSyncModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">数据同步与比较</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 同步类型选择 -->
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">同步类型</label>
+                            <div class="btn-group" role="group">
+                                <input type="radio" class="btn-check" name="syncType" id="syncTableData" value="table" checked>
+                                <label class="btn btn-outline-primary" for="syncTableData">表数据同步</label>
+
+                                <input type="radio" class="btn-check" name="syncType" id="syncDatabase" value="database">
+                                <label class="btn btn-outline-primary" for="syncDatabase">数据库同步</label>
+
+                                <input type="radio" class="btn-check" name="syncType" id="syncSchema" value="schema">
+                                <label class="btn btn-outline-primary" for="syncSchema">结构同步</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 源数据库配置 -->
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">源数据库</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <label class="form-label">连接</label>
+                                    <select class="form-select" id="sourceConnection">
+                                        <option value="">选择连接...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">数据库</label>
+                                    <select class="form-select" id="sourceDatabase">
+                                        <option value="">选择数据库...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">表</label>
+                                    <select class="form-select" id="sourceTable">
+                                        <option value="">选择表...</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="row mt-2">
+                                <div class="col-md-12">
+                                    <label class="form-label">自定义查询（可选）</label>
+                                    <textarea class="form-control" id="sourceQuery" rows="3" placeholder="输入自定义SQL查询..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 目标数据库配置 -->
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">目标数据库</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <label class="form-label">连接</label>
+                                    <select class="form-select" id="targetConnection">
+                                        <option value="">选择连接...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">数据库</label>
+                                    <select class="form-select" id="targetDatabase">
+                                        <option value="">选择数据库...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">表</label>
+                                    <select class="form-select" id="targetTable">
+                                        <option value="">选择表...</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 同步选项 -->
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">同步选项</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">同步模式</label>
+                                        <select class="form-select" id="syncMode">
+                                            <option value="insert">只插入新数据</option>
+                                            <option value="update">只更新现有数据</option>
+                                            <option value="upsert">插入或更新</option>
+                                            <option value="replace">替换所有数据</option>
+                                            <option value="truncate_replace">清空后替换</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">主键列</label>
+                                        <input type="text" class="form-control" id="syncKeyColumns" placeholder="id,uuid,email（多个列用逗号分隔）">
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="syncCreateTable" checked>
+                                            <label class="form-check-label" for="syncCreateTable">
+                                                自动创建表（如果不存在）
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="syncAlterTable">
+                                            <label class="form-check-label" for="syncAlterTable">
+                                                自动修改表结构
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="syncDropTable">
+                                            <label class="form-check-label" for="syncDropTable">
+                                                删除目标表中多余的列
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <label class="form-label">列映射</label>
+                                    <div id="columnMapping" class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                                        <div class="text-muted text-center">请先选择源表和目标表</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 预览区域 -->
+                    <div class="card mb-3" id="syncPreviewCard" style="display: none;">
+                        <div class="card-header">
+                            <h6 class="mb-0">同步预览</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row mb-3">
+                                <div class="col-md-3">
+                                    <div class="text-center">
+                                        <div class="h4 text-primary" id="previewInsertCount">0</div>
+                                        <div class="text-muted">新增记录</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="text-center">
+                                        <div class="h4 text-warning" id="previewUpdateCount">0</div>
+                                        <div class="text-muted">更新记录</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="text-center">
+                                        <div class="h4 text-info" id="previewUnchangedCount">0</div>
+                                        <div class="text-muted">未变化记录</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="text-center">
+                                        <div class="h4 text-danger" id="previewDeleteCount">0</div>
+                                        <div class="text-muted">删除记录</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <ul class="nav nav-tabs" id="previewTabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="previewDiffTab" data-bs-toggle="tab" data-bs-target="#previewDiff" type="button">差异详情</button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="previewSqlTab" data-bs-toggle="tab" data-bs-target="#previewSql" type="button">SQL预览</button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="previewLogTab" data-bs-toggle="tab" data-bs-target="#previewLog" type="button">执行日志</button>
+                                    </li>
+                                </ul>
+                                <div class="tab-content mt-3">
+                                    <div class="tab-pane fade show active" id="previewDiff">
+                                        <div id="diffContent" class="border rounded p-2" style="max-height: 300px; overflow-y: auto;">
+                                            <!-- 差异内容将在这里显示 -->
+                                        </div>
+                                    </div>
+                                    <div class="tab-pane fade" id="previewSql">
+                                        <pre id="sqlPreview" class="border rounded p-2" style="max-height: 300px; overflow-y: auto; background: #f8f9fa;"></pre>
+                                    </div>
+                                    <div class="tab-pane fade" id="previewLog">
+                                        <div id="syncLog" class="border rounded p-2" style="max-height: 300px; overflow-y: auto; background: #f8f9fa; font-family: monospace; font-size: 12px;">
+                                            <!-- 执行日志将在这里显示 -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-info" onclick="previewSync()" id="previewSyncBtn">
+                        <i class="fas fa-eye"></i> 预览同步
+                    </button>
+                    <button type="button" class="btn btn-primary" onclick="executeSync()" id="executeSyncBtn" disabled>
+                        <i class="fas fa-sync"></i> 执行同步
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据比较结果模态框 -->
+    <div class="modal fade" id="dataCompareModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">数据比较结果</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 比较统计 -->
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h6>比较摘要</h6>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="exportCompareResult()">
+                                        <i class="fas fa-download"></i> 导出结果
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-success" onclick="generateSyncScript()">
+                                        <i class="fas fa-code"></i> 生成同步脚本
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-2">
+                            <div class="card bg-primary text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareTotalRecords">0</div>
+                                    <div class="small">总记录数</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="card bg-success text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareIdentical">0</div>
+                                    <div class="small">相同记录</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="card bg-warning text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareDifferent">0</div>
+                                    <div class="small">不同记录</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="card bg-info text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareSourceOnly">0</div>
+                                    <div class="small">源表独有</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="card bg-danger text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareTargetOnly">0</div>
+                                    <div class="small">目标表独有</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="card bg-secondary text-white">
+                                <div class="card-body text-center">
+                                    <div class="h4" id="compareStructureDiff">0</div>
+                                    <div class="small">结构差异</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 过滤器和搜索 -->
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">过滤类型</label>
+                            <select class="form-select" id="compareFilter" onchange="filterCompareResults()">
+                                <option value="all">显示所有</option>
+                                <option value="different">仅显示不同</option>
+                                <option value="source_only">仅显示源表独有</option>
+                                <option value="target_only">仅显示目标表独有</option>
+                                <option value="identical">仅显示相同</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">搜索</label>
+                            <input type="text" class="form-control" id="compareSearch" placeholder="搜索记录..." onkeyup="searchCompareResults()">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">每页显示</label>
+                            <select class="form-select" id="comparePageSize" onchange="updateComparePagination()">
+                                <option value="10">10 条</option>
+                                <option value="25">25 条</option>
+                                <option value="50">50 条</option>
+                                <option value="100">100 条</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 比较结果表格 -->
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover" id="compareResultTable">
+                            <thead>
+                                <tr>
+                                    <th>状态</th>
+                                    <th>主键</th>
+                                    <th>字段名</th>
+                                    <th>源表值</th>
+                                    <th>目标表值</th>
+                                    <th>差异类型</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="compareResultBody">
+                                <!-- 比较结果将在这里显示 -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 分页 -->
+                    <nav aria-label="比较结果分页">
+                        <ul class="pagination justify-content-center" id="comparePagination">
+                            <!-- 分页按钮将在这里生成 -->
+                        </ul>
+                    </nav>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="openSyncFromCompare()">
+                        <i class="fas fa-sync"></i> 从比较结果同步
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脚本文件 -->
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/datatables.net@1.11.5/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.11.5/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ext-language_tools.js"></script>
+    <script src="js/main.js"></script>
+    <script src="test-connection.js"></script>
+    <script>
+        // 检查JavaScript加载状态
+        console.log('=== JavaScript加载检查 ===');
+        console.log('jQuery loaded:', typeof $ !== 'undefined');
+        console.log('Bootstrap loaded:', typeof bootstrap !== 'undefined');
+        console.log('Main.js loaded:', typeof showNewConnectionModal !== 'undefined');
+
+        // 检查关键函数
+        const functions = ['showNewConnectionModal', 'testLibraries', 'simpleModalTest'];
+        functions.forEach(func => {
+            console.log(`${func}:`, typeof window[func]);
+            if (typeof window[func] === 'undefined') {
+                console.error(`Function ${func} not found!`);
+            }
+        });
+
+        // 显示加载状态
+        window.addEventListener('load', function() {
+            console.log('Page fully loaded');
+            if (typeof showNewConnectionModal === 'undefined') {
+                console.error('showNewConnectionModal still not defined after page load!');
+                alert('JavaScript文件加载失败，请刷新页面重试。');
+            } else {
+                console.log('All functions loaded successfully');
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据源管理 - 数据库管理工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.11.5/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #0d6efd;
+            --success-color: #198754;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --info-color: #0dcaf0;
+        }
+
+        body {
+            background-color: #f8f9fa;
+        }
+
+        .navbar {
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        }
+
+        .stat-card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.1);
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .stat-card .card-body {
+            padding: 1.5rem;
+        }
+
+        .stat-card .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .stat-card .stat-icon.primary {
+            background-color: rgba(13, 110, 253, 0.1);
+            color: var(--primary-color);
+        }
+
+        .stat-card .stat-icon.success {
+            background-color: rgba(25, 135, 84, 0.1);
+            color: var(--success-color);
+        }
+
+        .stat-card .stat-icon.warning {
+            background-color: rgba(255, 193, 7, 0.1);
+            color: var(--warning-color);
+        }
+
+        .stat-card .stat-icon.danger {
+            background-color: rgba(220, 53, 69, 0.1);
+            color: var(--danger-color);
+        }
+
+        .datasource-card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.1);
+            transition: all 0.2s;
+            margin-bottom: 1rem;
+        }
+
+        .datasource-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0,0,0,.15);
+        }
+
+        .datasource-card .card-header {
+            background-color: #fff;
+            border-bottom: 1px solid #eee;
+            padding: 1rem;
+        }
+
+        .datasource-type {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .datasource-type.mysql {
+            background-color: #00758f;
+            color: white;
+        }
+
+        .datasource-type.postgresql {
+            background-color: #336791;
+            color: white;
+        }
+
+        .datasource-type.mongodb {
+            background-color: #47a248;
+            color: white;
+        }
+
+        .datasource-type.redis {
+            background-color: #dc382d;
+            color: white;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-badge.connected {
+            background-color: rgba(25, 135, 84, 0.1);
+            color: var(--success-color);
+        }
+
+        .status-badge.disconnected {
+            background-color: rgba(220, 53, 69, 0.1);
+            color: var(--danger-color);
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            background-color: #e9ecef;
+            color: #495057;
+            margin-right: 0.25rem;
+        }
+
+        .action-buttons .btn {
+            margin-right: 0.25rem;
+        }
+
+        .search-box {
+            position: relative;
+        }
+
+        .search-box input {
+            padding-left: 2.5rem;
+        }
+
+        .search-box i {
+            position: absolute;
+            left: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6c757d;
+        }
+
+        .modal-header {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .connection-stats {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .btn-group-sm .btn {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .table-responsive {
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .table thead th {
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.5px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #6c757d;
+        }
+
+        .empty-state i {
+            font-size: 4rem;
+            color: #dee2e6;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="index.html">
+                <i class="fas fa-database"></i> 数据库管理工具
+            </a>
+            <div class="navbar-nav ms-auto">
+                <div class="nav-item">
+                    <a class="nav-link" href="index.html">
+                        <i class="fas fa-home"></i> 主页
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a class="nav-link active" href="#">
+                        <i class="fas fa-server"></i> 数据源管理
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a class="nav-link" href="#" onclick="showSettings()">
+                        <i class="fas fa-cog"></i> 设置
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <!-- 统计卡片 -->
+        <div class="row mb-4">
+            <div class="col-xl-3 col-md-6 mb-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <div class="stat-icon primary">
+                            <i class="fas fa-database"></i>
+                        </div>
+                        <h3 class="card-title" id="totalDatasources">0</h3>
+                        <p class="card-text text-muted">总数据源</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6 mb-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <div class="stat-icon success">
+                            <i class="fas fa-link"></i>
+                        </div>
+                        <h3 class="card-title" id="connectedDatasources">0</h3>
+                        <p class="card-text text-muted">已连接</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6 mb-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <div class="stat-icon warning">
+                            <i class="fas fa-unlink"></i>
+                        </div>
+                        <h3 class="card-title" id="disconnectedDatasources">0</h3>
+                        <p class="card-text text-muted">未连接</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6 mb-3">
+                <div class="card stat-card">
+                    <div class="card-body">
+                        <div class="stat-icon info">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <h3 class="card-title" id="avgResponseTime">0ms</h3>
+                        <p class="card-text text-muted">平均响应时间</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮和搜索 -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="btn-group" role="group">
+                    <button class="btn btn-primary" onclick="showCreateModal()">
+                        <i class="fas fa-plus"></i> 新建数据源
+                    </button>
+                    <button class="btn btn-outline-primary" onclick="showImportModal()">
+                        <i class="fas fa-file-import"></i> 导入
+                    </button>
+                    <button class="btn btn-outline-primary" onclick="exportDatasources()">
+                        <i class="fas fa-file-export"></i> 导出
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="refreshDataSources()">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" class="form-control" id="searchInput" placeholder="搜索数据源..." onkeyup="searchDataSources()">
+                </div>
+            </div>
+        </div>
+
+        <!-- 过滤器 -->
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="btn-group" role="group">
+                    <button class="btn btn-outline-secondary active" onclick="filterByType('all')">全部</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByType('mysql')">MySQL</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByType('postgresql')">PostgreSQL</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByType('mongodb')">MongoDB</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByType('redis')">Redis</button>
+                </div>
+                <div class="btn-group ms-2" role="group">
+                    <button class="btn btn-outline-secondary active" onclick="filterByStatus('all')">全部状态</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByStatus('connected')">已连接</button>
+                    <button class="btn btn-outline-secondary" onclick="filterByStatus('disconnected')">未连接</button>
+                </div>
+            </div>
+            <div class="col-md-4 text-end">
+                <select class="form-select form-select-sm d-inline-block" style="width: auto;" id="tagFilter" onchange="filterByTag()">
+                    <option value="">按标签筛选</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 数据源列表 -->
+        <div class="row" id="datasourceContainer">
+            <div class="col-12">
+                <div class="empty-state">
+                    <i class="fas fa-database"></i>
+                    <h5>暂无数据源</h5>
+                    <p>点击"新建数据源"按钮创建您的第一个数据源</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 创建/编辑数据源模态框 -->
+    <div class="modal fade" id="datasourceModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">新建数据源</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="datasourceForm">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">数据源名称 <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="dsName" required>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">数据库类型 <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="dsType" required onchange="showConfigForm()">
+                                        <option value="">请选择</option>
+                                        <option value="mysql">MySQL</option>
+                                        <option value="postgresql">PostgreSQL</option>
+                                        <option value="mongodb">MongoDB</option>
+                                        <option value="redis">Redis</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">描述</label>
+                            <textarea class="form-control" id="dsDescription" rows="2"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">标签</label>
+                            <input type="text" class="form-control" id="dsTags" placeholder="用逗号分隔多个标签">
+                        </div>
+
+                        <!-- MySQL配置 -->
+                        <div id="mysqlConfig" class="config-form" style="display: none;">
+                            <h6 class="mb-3">MySQL配置</h6>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">主机地址 <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="mysqlHost" value="localhost" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">端口 <span class="text-danger">*</span></label>
+                                        <input type="number" class="form-control" id="mysqlPort" value="3306" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">用户名 <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="mysqlUser" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">密码 <span class="text-danger">*</span></label>
+                                        <input type="password" class="form-control" id="mysqlPassword" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">数据库</label>
+                                <input type="text" class="form-control" id="mysqlDatabase" placeholder="可选">
+                            </div>
+                        </div>
+
+                        <!-- PostgreSQL配置 -->
+                        <div id="postgresqlConfig" class="config-form" style="display: none;">
+                            <h6 class="mb-3">PostgreSQL配置</h6>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">主机地址 <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="pgHost" value="localhost" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">端口 <span class="text-danger">*</span></label>
+                                        <input type="number" class="form-control" id="pgPort" value="5432" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">用户名 <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="pgUser" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">密码 <span class="text-danger">*</span></label>
+                                        <input type="password" class="form-control" id="pgPassword" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">数据库</label>
+                                <input type="text" class="form-control" id="pgDatabase" placeholder="可选">
+                            </div>
+                        </div>
+
+                        <!-- MongoDB配置 -->
+                        <div id="mongodbConfig" class="config-form" style="display: none;">
+                            <h6 class="mb-3">MongoDB配置</h6>
+                            <div class="mb-3">
+                                <label class="form-label">连接URL <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="mongodbUrl" value="mongodb://localhost:27017" required>
+                                <div class="form-text">示例: mongodb://localhost:27017</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">数据库名称 <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="mongodbDatabase" required>
+                            </div>
+                        </div>
+
+                        <!-- Redis配置 -->
+                        <div id="redisConfig" class="config-form" style="display: none;">
+                            <h6 class="mb-3">Redis配置</h6>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">主机地址 <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="redisHost" value="localhost" required>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label">端口 <span class="text-danger">*</span></label>
+                                        <input type="number" class="form-control" id="redisPort" value="6379" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">密码</label>
+                                <input type="password" class="form-control" id="redisPassword">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">数据库</label>
+                                <input type="number" class="form-control" id="redisDb" value="0" min="0" max="15">
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="testConnection()" id="testBtn">
+                        <i class="fas fa-plug"></i> 测试连接
+                    </button>
+                    <button type="button" class="btn btn-success" onclick="saveDatasource()" id="saveBtn">
+                        <i class="fas fa-save"></i> 保存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入模态框 -->
+    <div class="modal fade" id="importModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">导入数据源</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="importForm">
+                        <div class="mb-3">
+                            <label class="form-label">选择文件 <span class="text-danger">*</span></label>
+                            <input type="file" class="form-control" id="importFile" accept=".json" required>
+                            <div class="form-text">支持JSON格式的数据源配置文件</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="importDatasources()">
+                        <i class="fas fa-file-import"></i> 导入
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量操作模态框 -->
+    <div class="modal fade" id="batchModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">批量操作</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">操作类型</label>
+                        <select class="form-select" id="batchOperation">
+                            <option value="connect">批量连接</option>
+                            <option value="disconnect">批量断开</option>
+                            <option value="delete">批量删除</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">已选择的数据源</label>
+                        <div id="selectedDatasources" class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                            <small class="text-muted">未选择任何数据源</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-danger" onclick="executeBatchOperation()">
+                        <i class="fas fa-play"></i> 执行
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="js/datasource-manager.js"></script>
+</body>
+</html>

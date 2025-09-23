@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>调试连接数据</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>localStorage 调试工具</h1>
+    <div id="output"></div>
+
+    <script>
+        $(document).ready(function() {
+            let output = '<h2>localStorage 内容:</h2>';
+
+            // 检查所有localStorage键
+            const keys = ['savedConnections', 'connections', 'dbConnections'];
+            keys.forEach(key => {
+                const value = localStorage.getItem(key);
+                output += `<h3>${key}:</h3>`;
+                if (value) {
+                    try {
+                        const parsed = JSON.parse(value);
+                        output += `<pre>${JSON.stringify(parsed, null, 2)}</pre>`;
+                        output += `<p>解析成功，包含 ${parsed.length} 个连接</p>`;
+                    } catch (e) {
+                        output += `<p style="color: red;">解析失败: ${e.message}</p>`;
+                        output += `<pre>${value}</pre>`;
+                    }
+                } else {
+                    output += '<p style="color: gray;">无数据</p>';
+                }
+                output += '<hr>';
+            });
+
+            // 检查所有localStorage键
+            output += '<h2>所有localStorage键:</h2>';
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                const value = localStorage.getItem(key);
+                output += `<p><strong>${key}:</strong> ${value.substring(0, 100)}${value.length > 100 ? '...' : ''}</p>`;
+            }
+
+            $('#output').html(output);
+        });
+    </script>
+</body>
+</html>

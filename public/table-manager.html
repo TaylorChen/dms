@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>表管理 - 数据库管理工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 2rem;
+        }
+        .sidebar {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+        }
+        .main-content {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            min-height: calc(100vh - 100px);
+        }
+        .table-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .table-item:hover {
+            background-color: #f8f9fa;
+        }
+        .table-item.active {
+            background-color: #e3f2fd;
+            border-left: 3px solid #2196f3;
+        }
+        .table-item.pinned {
+            background-color: #fff3e0;
+        }
+        .table-structure {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+        .data-table {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .action-btn {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+            margin: 0.125rem;
+        }
+        .tab-content {
+            padding: 1.5rem;
+        }
+        .badge-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+        .column-type {
+            color: #6c757d;
+            font-size: 0.875rem;
+        }
+        .column-nullable {
+            color: #dc3545;
+        }
+        .column-primary {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .loading-spinner {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 9999;
+        }
+        .modal-loading {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- 左侧栏 - 数据库和表列表 -->
+            <div class="col-md-3">
+                <div class="sidebar">
+                    <div class="p-3 border-bottom">
+                        <h5 class="mb-0">
+                            <i class="fas fa-database text-primary"></i> 数据库
+                        </h5>
+                    </div>
+                    <div id="databaseList">
+                        <!-- 数据库列表将在这里动态加载 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主内容区 -->
+            <div class="col-md-9">
+                <div class="main-content">
+                    <!-- 顶部工具栏 -->
+                    <div class="p-3 border-bottom">
+                        <div class="row align-items-center">
+                            <div class="col-md-6">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-table text-success"></i>
+                                    <span id="currentTableTitle">请选择表</span>
+                                </h5>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="btn-group float-end" role="group">
+                                    <button class="btn btn-outline-primary btn-sm" onclick="refreshTable()" title="刷新">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </button>
+                                    <button class="btn btn-outline-warning btn-sm" onclick="pinTable()" title="固定表">
+                                        <i class="fas fa-thumbtack"></i>
+                                    </button>
+                                    <button class="btn btn-outline-info btn-sm" onclick="copyTableName()" title="复制表名">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                    <div class="btn-group" role="group">
+                                        <button class="btn btn-outline-success dropdown-toggle btn-sm" data-bs-toggle="dropdown">
+                                            <i class="fas fa-download"></i> 导出
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="exportAsSQL()">SQL文件</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="exportAsCSV()">CSV</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="exportAsExcel()">Excel</a></li>
+                                        </ul>
+                                    </div>
+                                    <div class="btn-group" role="group">
+                                        <button class="btn btn-outline-primary dropdown-toggle btn-sm" data-bs-toggle="dropdown">
+                                            <i class="fas fa-upload"></i> 导入
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="showImportDataModal()">导入数据</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showImportSQLModal()">导入SQL</a></li>
+                                        </ul>
+                                    </div>
+                                    <div class="btn-group" role="group">
+                                        <button class="btn btn-outline-danger dropdown-toggle btn-sm" data-bs-toggle="dropdown">
+                                            <i class="fas fa-cog"></i> 操作
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="showCopyTableModal()">复制表</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showEditTableModal()">编辑表</a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="showGenerateDataModal()">生成测试数据</a></li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li><a class="dropdown-item text-warning" href="#" onclick="truncateTable()">清空数据</a></li>
+                                            <li><a class="dropdown-item text-danger" href="#" onclick="deleteTable()">删除表</a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 标签页 -->
+                    <ul class="nav nav-tabs" id="tableTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="structure-tab" data-bs-toggle="tab" data-bs-target="#structure" type="button">
+                                <i class="fas fa-sitemap"></i> 表结构
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="data-tab" data-bs-toggle="tab" data-bs-target="#data" type="button">
+                                <i class="fas fa-database"></i> 数据
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="ddl-tab" data-bs-toggle="tab" data-bs-target="#ddl" type="button">
+                                <i class="fas fa-code"></i> DDL
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="indexes-tab" data-bs-toggle="tab" data-bs-target="#indexes" type="button">
+                                <i class="fas fa-list-ol"></i> 索引
+                            </button>
+                        </li>
+                    </ul>
+
+                    <!-- 标签页内容 -->
+                    <div class="tab-content" id="tableTabContent">
+                        <!-- 表结构 -->
+                        <div class="tab-pane fade show active" id="structure" role="tabpanel">
+                            <div id="tableStructure">
+                                <div class="text-center text-muted py-5">
+                                    <i class="fas fa-table fa-3x mb-3"></i>
+                                    <p>请选择一个表查看结构</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 数据 -->
+                        <div class="tab-pane fade" id="data" role="tabpanel">
+                            <div id="tableData">
+                                <div class="text-center text-muted py-5">
+                                    <i class="fas fa-database fa-3x mb-3"></i>
+                                    <p>请选择一个表查看数据</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- DDL -->
+                        <div class="tab-pane fade" id="ddl" role="tabpanel">
+                            <div id="tableDDL">
+                                <div class="text-center text-muted py-5">
+                                    <i class="fas fa-code fa-3x mb-3"></i>
+                                    <p>请选择一个表查看DDL</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 索引 -->
+                        <div class="tab-pane fade" id="indexes" role="tabpanel">
+                            <div id="tableIndexes">
+                                <div class="text-center text-muted py-5">
+                                    <i class="fas fa-list-ol fa-3x mb-3"></i>
+                                    <p>请选择一个表查看索引</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 复制表模态框 -->
+    <div class="modal fade" id="copyTableModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">复制表</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="copyTableForm">
+                        <div class="mb-3">
+                            <label class="form-label">新表名</label>
+                            <input type="text" class="form-control" id="newTableName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">复制选项</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="copyStructure" checked>
+                                <label class="form-check-label" for="copyStructure">
+                                    复制表结构
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="copyData" checked>
+                                <label class="form-check-label" for="copyData">
+                                    复制数据
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="copyIndexes" checked>
+                                <label class="form-check-label" for="copyIndexes">
+                                    复制索引
+                                </label>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="copyTable()">复制</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 生成测试数据模态框 -->
+    <div class="modal fade" id="generateDataModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">生成测试数据</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="generateDataForm">
+                        <div class="mb-3">
+                            <label class="form-label">生成行数</label>
+                            <input type="number" class="form-control" id="generateRowCount" value="100" min="1" max="10000">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">数据类型</label>
+                            <select class="form-select" id="generateDataType">
+                                <option value="random">随机数据</option>
+                                <option value="sequential">序列数据</option>
+                                <option value="pattern">模式数据</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">清空现有数据</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="truncateBeforeGenerate">
+                                <label class="form-check-label" for="truncateBeforeGenerate">
+                                    清空表数据
+                                </label>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="generateTestData()">生成</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入数据模态框 -->
+    <div class="modal fade" id="importDataModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">导入数据</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="importDataForm">
+                        <div class="mb-3">
+                            <label class="form-label">选择文件</label>
+                            <input type="file" class="form-control" id="importDataFile" accept=".csv,.xlsx,.xls" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">文件格式</label>
+                            <select class="form-select" id="importDataFormat">
+                                <option value="csv">CSV</option>
+                                <option value="excel">Excel</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">导入选项</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="importHeaderRow" checked>
+                                <label class="form-check-label" for="importHeaderRow">
+                                    包含标题行
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="importTruncateTable">
+                                <label class="form-check-label" for="importTruncateTable">
+                                    清空现有数据
+                                </label>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="importData()">导入</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载指示器 -->
+    <div class="loading-spinner">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/table-manager.js"></script>
+</body>
+</html>
