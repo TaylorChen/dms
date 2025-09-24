@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL自动补全功能测试</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .editor-container {
+            height: 300px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .log-container {
+            height: 200px;
+            overflow-y: auto;
+            background-color: #000;
+            color: #0f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mt-3">MySQL自动补全功能测试</h1>
+
+                <div class="test-section">
+                    <h3>连接配置</h3>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label>MySQL连接:</label>
+                            <select id="connectionSelect" class="form-select">
+                                <option value="">选择MySQL连接...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label>数据库:</label>
+                            <select id="databaseSelect" class="form-select">
+                                <option value="">选择数据库...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <button id="loadStructureBtn" class="btn btn-primary">加载表结构</button>
+                        <button id="testCompletionBtn" class="btn btn-success">测试自动补全</button>
+                    </div>
+                </div>
+
+                <div class="test-section">
+                    <h3>SQL编辑器测试</h3>
+                    <div class="mb-3">
+                        <label>测试场景:</label>
+                        <select id="testScenario" class="form-select">
+                            <option value="select">SELECT语句 - 字段补全</option>
+                            <option value="from">FROM子句 - 表名补全</option>
+                            <option value="where">WHERE子句 - 字段补全</option>
+                            <option value="insert">INSERT语句 - 字段补全</option>
+                            <option value="update">UPDATE语句 - 字段补全</option>
+                        </select>
+                    </div>
+                    <div id="sqlEditor" class="editor-container"></div>
+                    <div class="mt-3">
+                        <small class="text-muted">
+                            提示：在编辑器中输入SQL语句，按Tab键触发自动补全。例如：<br>
+                            • SELECT [在此处按Tab] FROM users<br>
+                            • SELECT * FROM [在此处按Tab]<br>
+                            • SELECT * FROM users WHERE [在此处按Tab]
+                        </small>
+                    </div>
+                </div>
+
+                <div class="test-section">
+                    <h3>控制台日志</h3>
+                    <div id="logContainer" class="log-container"></div>
+                    <div class="mt-2">
+                        <button id="clearLogBtn" class="btn btn-secondary">清空日志</button>
+                    </div>
+                </div>
+
+                <div class="test-section">
+                    <h3>数据库结构信息</h3>
+                    <div id="structureInfo" class="pre-scrollable">
+                        <pre>尚未加载数据库结构</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ext-language_tools.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/mode-sql.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/theme-monokai.js"></script>
+
+    <script>
+        let testEditor = null;
+        let currentDbStructure = null;
+
+        // 初始化编辑器
+        function initializeEditor() {
+            testEditor = ace.edit("sqlEditor");
+            testEditor.setTheme("ace/theme/monokai");
+            testEditor.session.setMode("ace/mode/sql");
+            testEditor.setOptions({
+                fontSize: "14px",
+                enableBasicAutocompletion: true,
+                enableLiveAutocompletion: true,
+                enableSnippets: true,
+                showPrintMargin: false
+            });
+
+            log('编辑器初始化完成');
+        }
+
+        // 日志函数
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const color = type === 'error' ? '#f00' : type === 'success' ? '#0f0' : '#ff0';
+            const logEntry = `<span style="color: ${color}">[${timestamp}] ${message}</span>`;
+            $('#logContainer').append(logEntry + '<br>');
+            $('#logContainer').scrollTop($('#logContainer')[0].scrollHeight);
+        }
+
+        // 加载连接列表
+        async function loadConnections() {
+            try {
+                const response = await fetch('/api/datasources');
+                const result = await response.json();
+
+                if (result.success && result.data) {
+                    const select = $('#connectionSelect');
+                    select.empty();
+                    select.append('<option value="">选择MySQL连接...</option>');
+
+                    result.data.forEach(conn => {
+                        if (conn.type === 'mysql') {
+                            select.append(`<option value="${conn.id}">${conn.name}</option>`);
+                        }
+                    });
+
+                    log(`加载了 ${result.data.filter(c => c.type === 'mysql').length} 个MySQL连接`);
+                }
+            } catch (error) {
+                log('加载连接失败: ' + error.message, 'error');
+            }
+        }
+
+        // 加载数据库列表
+        async function loadDatabases() {
+            const connectionId = $('#connectionSelect').val();
+            if (!connectionId) return;
+
+            try {
+                const response = await fetch(`/api/structure/${connectionId}`);
+                const result = await response.json();
+
+                if (result.success && result.data) {
+                    const select = $('#databaseSelect');
+                    select.empty();
+                    select.append('<option value="">选择数据库...</option>');
+
+                    result.data.forEach(db => {
+                        select.append(`<option value="${db.name}">${db.name}</option>`);
+                    });
+
+                    log(`加载了 ${result.data.length} 个数据库`);
+                }
+            } catch (error) {
+                log('加载数据库失败: ' + error.message, 'error');
+            }
+        }
+
+        // 加载数据库结构
+        async function loadDatabaseStructure() {
+            const connectionId = $('#connectionSelect').val();
+            const database = $('#databaseSelect').val();
+
+            if (!connectionId || !database) {
+                log('请先选择连接和数据库', 'error');
+                return;
+            }
+
+            try {
+                log(`正在加载 ${database} 数据库结构...`);
+
+                const response = await fetch(`/api/structure/${connectionId}/${database}`);
+                const result = await response.json();
+
+                if (result.success && result.data) {
+                    currentDbStructure = result.data;
+                    log(`成功加载 ${result.data.length} 个表的结构`, 'success');
+
+                    // 显示结构信息
+                    let structureText = `数据库: ${database}\n表数量: ${result.data.length}\n\n`;
+                    result.data.forEach(table => {
+                        structureText += `表: ${table.table_name}\n`;
+                        structureText += `字段: ${table.columns.map(col => col.column_name).join(', ')}\n\n`;
+                    });
+
+                    $('#structureInfo pre').text(structureText);
+
+                    // 设置自动补全
+                    setupSQLAutocompletion();
+                } else {
+                    log('加载结构失败: ' + result.message, 'error');
+                }
+            } catch (error) {
+                log('加载结构失败: ' + error.message, 'error');
+            }
+        }
+
+        // 设置SQL自动补全
+        function setupSQLAutocompletion() {
+            if (!testEditor || !currentDbStructure) return;
+
+            log('设置SQL自动补全...');
+
+            const sqlCompleter = {
+                getCompletions: function(editor, session, pos, prefix, callback) {
+                    const line = session.getLine(pos.row);
+                    const textBefore = line.substring(0, pos.column);
+                    const context = analyzeSQLContext(line, pos.column);
+
+                    log(`补全触发: prefix="${prefix}", context=${context.clauseType}`, 'debug');
+
+                    let suggestions = [];
+
+                    if (context.clauseType === 'SELECT') {
+                        suggestions = getFieldSuggestions(prefix);
+                    } else if (context.clauseType === 'FROM' || context.clauseType === 'JOIN') {
+                        suggestions = getTableSuggestions(prefix);
+                    } else if (context.clauseType === 'WHERE') {
+                        suggestions = getWhereSuggestions(prefix);
+                    } else {
+                        suggestions = getGeneralSuggestions(prefix);
+                    }
+
+                    log(`返回 ${suggestions.length} 个建议`, 'debug');
+                    callback(null, suggestions);
+                }
+            };
+
+            testEditor.completers = [sqlCompleter];
+            log('SQL自动补全设置完成', 'success');
+        }
+
+        // 分析SQL上下文
+        function analyzeSQLContext(line, column) {
+            const textBefore = line.substring(0, column).toLowerCase();
+            const words = textBefore.trim().split(/\s+/).filter(w => w);
+
+            let clauseType = '';
+
+            if (textBefore.includes('select') && !textBefore.includes('from')) {
+                clauseType = 'SELECT';
+            } else if (textBefore.includes('from') || textBefore.includes('join')) {
+                clauseType = 'FROM';
+            } else if (textBefore.includes('where')) {
+                clauseType = 'WHERE';
+            }
+
+            return { clauseType, words, textBefore };
+        }
+
+        // 获取表名建议
+        function getTableSuggestions(prefix) {
+            if (!currentDbStructure) return [];
+
+            return currentDbStructure
+                .filter(table => table.table_name.toLowerCase().startsWith(prefix.toLowerCase()))
+                .map(table => ({
+                    caption: table.table_name,
+                    value: table.table_name,
+                    meta: 'table',
+                    score: 1000
+                }));
+        }
+
+        // 获取字段建议
+        function getFieldSuggestions(prefix) {
+            if (!currentDbStructure) return [];
+
+            let suggestions = [];
+            currentDbStructure.forEach(table => {
+                table.columns.forEach(col => {
+                    if (col.column_name.toLowerCase().includes(prefix.toLowerCase())) {
+                        suggestions.push({
+                            caption: col.column_name,
+                            value: col.column_name,
+                            meta: 'field',
+                            doc: `${table.table_name}.${col.column_name} (${col.data_type})`,
+                            score: 900
+                        });
+                    }
+                });
+            });
+            return suggestions;
+        }
+
+        // 获取WHERE子句建议
+        function getWhereSuggestions(prefix) {
+            let suggestions = [
+                { caption: 'AND', value: 'AND', meta: 'operator', score: 900 },
+                { caption: 'OR', value: 'OR', meta: 'operator', score: 900 },
+                { caption: 'LIKE', value: 'LIKE', meta: 'operator', score: 900 },
+                { caption: 'IN', value: 'IN', meta: 'operator', score: 900 },
+                { caption: 'BETWEEN', value: 'BETWEEN', meta: 'operator', score: 900 }
+            ];
+
+            const fieldSuggestions = getFieldSuggestions(prefix);
+            return [...suggestions, ...fieldSuggestions];
+        }
+
+        // 获取通用建议
+        function getGeneralSuggestions(prefix) {
+            const keywords = ['SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'JOIN', 'INNER JOIN', 'LEFT JOIN'];
+            return keywords
+                .filter(kw => kw.toLowerCase().startsWith(prefix.toLowerCase()))
+                .map(kw => ({
+                    caption: kw,
+                    value: kw,
+                    meta: 'keyword',
+                    score: 800
+                }));
+        }
+
+        // 测试场景
+        function setTestScenario() {
+            const scenario = $('#testScenario').val();
+            const testCases = {
+                'select': 'SELECT [光标在此处按Tab] FROM users',
+                'from': 'SELECT * FROM [光标在此处按Tab] WHERE id = 1',
+                'where': 'SELECT * FROM users WHERE [光标在此处按Tab] = 1',
+                'insert': 'INSERT INTO users ([光标在此处按Tab]) VALUES (..., ...)',
+                'update': 'UPDATE users SET [光标在此处按Tab] = ... WHERE id = 1'
+            };
+
+            if (testCases[scenario]) {
+                testEditor.setValue(testCases[scenario].replace('[光标在此处按Tab]', ''));
+                // 将光标移动到指定位置
+                const pos = testCases[scenario].indexOf('[光标在此处按Tab]');
+                testEditor.gotoLine(0, pos);
+                testEditor.focus();
+            }
+        }
+
+        // 页面初始化
+        $(document).ready(function() {
+            initializeEditor();
+            loadConnections();
+
+            // 事件绑定
+            $('#connectionSelect').change(loadDatabases);
+            $('#loadStructureBtn').click(loadDatabaseStructure);
+            $('#testScenario').change(setTestScenario);
+            $('#clearLogBtn').click(() => $('#logContainer').empty());
+            $('#testCompletionBtn').click(() => {
+                testEditor.execCommand('startAutocomplete');
+                log('手动触发自动补全');
+            });
+
+            log('测试页面初始化完成', 'success');
+        });
+    </script>
+</body>
+</html>

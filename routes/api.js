@@ -246,6 +246,71 @@ router.get('/structure/:connectionId/:database/:table', async (req, res) => {
     }
 });
 
+// 获取指定数据库的所有表结构（用于自动补全）
+router.get('/structure/:connectionId/:database', async (req, res) => {
+    try {
+        const { connectionId, database } = req.params;
+        const connInfo = connectionManager.getConnection(connectionId);
+
+        if (!connInfo) {
+            return res.status(404).json({ success: false, error: '连接不存在' });
+        }
+
+        let structure = [];
+
+        switch (connInfo.type) {
+            case 'mysql': {
+                const service = new MySQLService(connInfo.connection);
+
+                // 获取所有表
+                const tablesResult = await service.getTables(database);
+                if (!tablesResult.success) {
+                    return res.json(tablesResult);
+                }
+
+                // 获取每个表的结构
+                for (const tableName of tablesResult.data) {
+                    const structureResult = await service.getTableStructure(database, tableName);
+                    if (structureResult.success) {
+                        structure.push({
+                            table_name: tableName,
+                            columns: structureResult.data
+                        });
+                    }
+                }
+                break;
+            }
+            case 'postgresql': {
+                const service = new PostgreSQLService(connInfo.connection);
+
+                // 获取所有表
+                const tablesResult = await service.getTables(database);
+                if (!tablesResult.success) {
+                    return res.json(tablesResult);
+                }
+
+                // 获取每个表的结构
+                for (const tableName of tablesResult.data) {
+                    const structureResult = await service.getTableStructure(database, tableName);
+                    if (structureResult.success) {
+                        structure.push({
+                            table_name: tableName,
+                            columns: structureResult.data
+                        });
+                    }
+                }
+                break;
+            }
+            default:
+                return res.status(400).json({ success: false, error: '不支持的数据库类型' });
+        }
+
+        res.json({ success: true, data: structure });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // 执行查询
 router.post('/query/:connectionId', async (req, res) => {
     try {

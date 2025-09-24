@@ -7,6 +7,10 @@ let dataTable = null;
 let pendingConnection = null;
 let sidebarOpen = false;
 
+// 数据库结构缓存
+let dbStructureCache = {};
+let currentDbStructure = null;
+
 // 初始化SQL编辑器
 function initializeSQLEditor() {
     if (typeof ace !== 'undefined') {
@@ -61,7 +65,7 @@ async function initializeApp() {
     await loadConnections();
 
     // 更新连接选择器
-    updateConnectionSelector();
+    updateConnectionSelectors();
 
     // 检查本地存储的分组配置
     if (localStorage.getItem('connectionGroups')) {
@@ -76,12 +80,16 @@ async function initializeApp() {
     // 加载同步历史记录
     loadSyncHistory();
 
-    // 如果有保存的连接，自动尝试连接第一个
+    // 如果有保存的连接，自动尝试连接第一个MySQL连接（优先选择MySQL）
     if (connections.length > 0) {
-        const firstConnection = connections[0];
-        if (firstConnection.autoConnect) {
+        // 优先选择MySQL连接，如果没有则选择第一个可用连接
+        const mysqlConnection = connections.find(conn => conn.type === 'mysql');
+        const preferredConnection = mysqlConnection || connections[0];
+
+        if (preferredConnection.autoConnect) {
             setTimeout(() => {
-                selectConnection(firstConnection.id);
+                console.log(`🔄 [DEBUG] 自动连接到 ${preferredConnection.name} (${preferredConnection.type})`);
+                selectConnection(preferredConnection.id);
             }, 500);
         }
     }
@@ -1018,20 +1026,17 @@ async function selectConnection(connectionId) {
     updateConnectionList();
     updateConnectionSelectors();
 
-    // 更新当前连接选择器
-    $('#currentConnection').val(connectionId);
-
     // 根据连接类型切换编辑器模式
     if (connection) {
         switchEditorMode(connection.type);
     }
 
-    // 更新数据库缓存以提供智能提示
-    if (typeof updateDatabaseCache === 'function') {
-        setTimeout(() => {
-            updateDatabaseCache();
-        }, 1000); // 延迟1秒更新，确保连接已建立
-    }
+    // 暂时禁用数据库缓存更新以排查连接切换问题
+    // if (typeof updateDatabaseCache === 'function') {
+    //     setTimeout(() => {
+    //         updateDatabaseCache();
+    //     }, 1000); // 延迟1秒更新，确保连接已建立
+    // }
 
     // 测试连接状态，如果连接不存在则重新建立连接
     if (connection) {
@@ -1049,10 +1054,13 @@ async function selectConnection(connectionId) {
     }
 
     // 加载数据库结构
-    await loadDatabaseStructure();
+    const selectedDatabase = $('#currentDatabase').val();
+    if (selectedDatabase && selectedDatabase !== '选择数据库') {
+        await loadDatabaseStructure(connectionId, selectedDatabase);
+    }
 
-    // 更新数据库选择器
-    await updateDatabaseSelector();
+    // 更新数据库选择器（使用loadDatabases函数确保一致性）
+    await loadDatabases(connectionId);
 }
 
 // 移除连接
@@ -1168,13 +1176,35 @@ function updateTableSelectors(data) {
 // 更新连接选择器
 function updateConnectionSelectors() {
     const selector = $('#currentConnection');
+    const currentValue = selector.val(); // 保存当前值
+
     selector.html('<option value="">选择数据库连接</option>');
 
-    connections.forEach(conn => {
-        selector.append(`<option value="${conn.id}">${conn.name}</option>`);
+    connections.forEach(connection => {
+        const statusIcon = connection.status === 'connected' ? '🟢' : '🔴';
+        selector.append(`<option value="${connection.id}">${statusIcon} ${connection.name}</option>`);
     });
 
-    selector.val(currentConnectionId);
+    // 优先恢复之前的值
+    if (currentValue && connections.some(conn => conn.id === currentValue)) {
+        selector.val(currentValue);
+        console.log(`🔄 [DEBUG] 恢复连接选择器到之前的值: ${connections.find(conn => conn.id === currentValue)?.name}`);
+    } else if (currentConnectionId && connections.some(conn => conn.id === currentConnectionId)) {
+        selector.val(currentConnectionId);
+        console.log(`🔄 [DEBUG] 更新连接选择器，当前选择: ${connections.find(conn => conn.id === currentConnectionId)?.name}`);
+    } else {
+        // 只有在完全没有当前连接时才设置默认值
+        const mysqlConnection = connections.find(conn => conn.type === 'mysql');
+        if (mysqlConnection) {
+            selector.val(mysqlConnection.id);
+            currentConnectionId = mysqlConnection.id;
+            console.log(`🔄 [DEBUG] 设置默认连接为MySQL: ${mysqlConnection.name}`);
+        } else if (connections.length > 0) {
+            selector.val(connections[0].id);
+            currentConnectionId = connections[0].id;
+            console.log(`🔄 [DEBUG] 设置默认连接为第一个: ${connections[0].name}`);
+        }
+    }
 }
 
 // 执行查询
@@ -6401,7 +6431,7 @@ function getJoinSuggestions(prefix, context) {
 }
 
 // 连接变更处理
-function onConnectionChange() {
+async function onConnectionChange() {
     const connectionId = $('#currentConnection').val();
     const connection = connections.find(conn => conn.id === connectionId);
 
@@ -6412,13 +6442,16 @@ function onConnectionChange() {
         // 更新当前连接ID
         currentConnectionId = connectionId;
 
+        // 清除当前数据库结构
+        currentDbStructure = null;
+
         // 加载数据库列表
-        loadDatabases(connectionId);
+        await loadDatabases(connectionId);
     }
 }
 
 // 加载数据库列表
-function loadDatabases(connectionId) {
+async function loadDatabases(connectionId) {
     const connection = connections.find(conn => conn.id === connectionId);
     if (!connection) return;
 
@@ -6426,29 +6459,35 @@ function loadDatabases(connectionId) {
     databaseSelect.empty();
     databaseSelect.append('<option value="">请选择数据库</option>');
 
-    if (connection.type === 'redis') {
-        // Redis数据库通常是0-15
-        for (let i = 0; i < 16; i++) {
-            databaseSelect.append(`<option value="${i}">数据库 ${i}</option>`);
+    try {
+        if (connection.type === 'redis') {
+            // Redis数据库通常是0-15
+            for (let i = 0; i < 16; i++) {
+                databaseSelect.append(`<option value="${i}">数据库 ${i}</option>`);
+            }
+            databaseSelect.val(connection.config.db || 0);
+        } else if (connection.type === 'mysql' || connection.type === 'postgresql') {
+            // MySQL/PostgreSQL数据库，调用API获取完整列表
+            const response = await fetch(`/api/structure/${connectionId}`);
+            const result = await response.json();
+
+            if (result.success) {
+                result.data.forEach(db => {
+                    databaseSelect.append(`<option value="${db.name}">${db.name}</option>`);
+                });
+                // 设置当前选择的数据库
+                if (connection.config.database) {
+                    databaseSelect.val(connection.config.database);
+                }
+            } else {
+                console.error('加载数据库列表失败:', result.error);
+                databaseSelect.append('<option value="">加载失败</option>');
+            }
         }
-        databaseSelect.val(connection.config.db || 0);
-    } else if (connection.type === 'mysql') {
-        // MySQL数据库
-        databaseSelect.append(`<option value="${connection.config.database || 'test'}">${connection.config.database || 'test'}</option>`);
-        databaseSelect.val(connection.config.database || 'test');
+    } catch (error) {
+        console.error('加载数据库列表失败:', error);
+        databaseSelect.append('<option value="">加载失败</option>');
     }
-}
-
-// 更新连接选择器
-function updateConnectionSelector() {
-    const selector = $('#currentConnection');
-    selector.empty();
-    selector.append('<option value="">选择数据库连接</option>');
-
-    connections.forEach(connection => {
-        const statusIcon = connection.status === 'connected' ? '🟢' : '🔴';
-        selector.append(`<option value="${connection.id}">${statusIcon} ${connection.name}</option>`);
-    });
 }
 
 // 数据库变更处理
@@ -6476,10 +6515,304 @@ function onDatabaseChange() {
         console.log(`切换到MySQL数据库: ${database}`);
         // 更新连接配置中的数据库名
         connection.config.database = database;
-        // 清空当前表选择器，等待重新加载
-        $('#tableSelector').empty();
-        $('#tableSelector').append('<option value="">选择表</option>');
+        // 清空所有表选择器，等待重新加载
+        $('#tableSelector, #structureTableSelector, #exportSourceTable').each(function() {
+            $(this).empty();
+            $(this).append('<option value="">选择表</option>');
+        });
+        // 获取数据库结构以用于自动补全和表选择器更新
+        loadDatabaseStructure(connectionId, database);
         showNotification(`已切换到MySQL数据库 ${database}`, 'info');
+    }
+}
+
+// 获取数据库结构用于自动补全
+async function loadDatabaseStructure(connectionId, database) {
+    const cacheKey = `${connectionId}_${database}`;
+
+    // 检查缓存
+    if (dbStructureCache[cacheKey]) {
+        console.log('📋 [DEBUG] 从缓存加载数据库结构:', cacheKey);
+        currentDbStructure = dbStructureCache[cacheKey];
+        updateSQLAutocompletionWithDBStructure();
+        return;
+    }
+
+    try {
+        console.log('🔄 [DEBUG] 从服务器获取数据库结构:', { connectionId, database });
+        showLoading('正在加载表结构...');
+
+        const response = await fetch(`/api/structure/${connectionId}/${database}`);
+        const result = await response.json();
+
+        if (result.success && result.data) {
+            // 处理数据库结构数据
+            const structure = {
+                tables: {},
+                connectionId: connectionId,
+                database: database,
+                loadedAt: new Date().toISOString()
+            };
+
+            // 处理表和字段信息
+            result.data.forEach(tableInfo => {
+                const tableName = tableInfo.table_name || tableInfo.TABLE_NAME;
+                let columns = [];
+
+                // 检查columns字段的结构
+                if (tableInfo.columns) {
+                    if (Array.isArray(tableInfo.columns)) {
+                        columns = tableInfo.columns;
+                    } else if (tableInfo.columns.columns && Array.isArray(tableInfo.columns.columns)) {
+                        columns = tableInfo.columns.columns;
+                    }
+                }
+
+                structure.tables[tableName] = {
+                    name: tableName,
+                    columns: columns.map(col => ({
+                        name: col.column_name || col.COLUMN_NAME,
+                        type: col.data_type || col.DATA_TYPE,
+                        isNullable: col.is_nullable || col.IS_NULLABLE,
+                        defaultValue: col.column_default || col.COLUMN_DEFAULT
+                    }))
+                };
+            });
+
+            // 缓存结构
+            dbStructureCache[cacheKey] = structure;
+            currentDbStructure = structure;
+
+            console.log('✅ [DEBUG] 数据库结构加载完成:', {
+                tables: Object.keys(structure.tables).length,
+                cacheKey: cacheKey
+            });
+
+            // 更新表选择器
+            const tableData = [{
+                name: database,
+                tables: Object.keys(structure.tables)
+            }];
+            updateTableSelectors(tableData);
+
+            // 更新SQL自动补全
+            updateSQLAutocompletionWithDBStructure();
+
+        } else {
+            console.error('❌ [DEBUG] 获取数据库结构失败:', result.message);
+            showNotification('获取表结构失败', 'error');
+        }
+    } catch (error) {
+        console.error('❌ [DEBUG] 加载数据库结构时出错:', error);
+        showNotification('加载表结构时出错', 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+// 更新SQL自动补全以包含数据库结构
+function updateSQLAutocompletionWithDBStructure() {
+    if (!sqlEditor || !currentDbStructure) {
+        console.log('⚠️ [DEBUG] 编辑器或数据库结构未初始化');
+        return;
+    }
+
+    console.log('🔄 [DEBUG] 更新SQL自动补全以包含数据库结构');
+
+    // 创建新的补全器，包含数据库结构信息
+    const sqlCompleterWithDB = {
+        getCompletions: function(editor, session, pos, prefix, callback) {
+            const line = session.getLine(pos.row);
+            const textBeforeCursor = line.substring(0, pos.column);
+            const context = analyzeSQLContext(line, pos.column);
+
+            console.log('🎯 [DEBUG] SQL自动补全触发:', {
+                prefix: prefix,
+                context: context,
+                hasDbStructure: !!currentDbStructure
+            });
+
+            let suggestions = [];
+
+            // 根据上下文获取建议
+            if (context.statementType === 'SELECT' && context.clauseType === 'SELECT') {
+                suggestions = getSelectFieldSuggestions(prefix, context);
+            } else if (context.clauseType === 'FROM' || context.clauseType === 'JOIN') {
+                suggestions = getTableSuggestions(prefix, context);
+            } else if (context.clauseType === 'WHERE') {
+                suggestions = getWhereFieldSuggestions(prefix, context);
+            } else if (context.statementType === 'INSERT') {
+                suggestions = getInsertFieldSuggestions(prefix, context);
+            } else if (context.statementType === 'UPDATE') {
+                suggestions = getUpdateFieldSuggestions(prefix, context);
+            } else {
+                suggestions = getGeneralSQLSuggestions(prefix, context);
+            }
+
+            console.log('🎯 [DEBUG] SQL建议数量:', suggestions.length);
+            callback(null, suggestions);
+        }
+    };
+
+    // 更新编辑器的补全器
+    const existingCompleters = sqlEditor.completers || [];
+    const nonSQLCompleters = existingCompleters.filter(c =>
+        c !== sqlEditor.completers.find(comp => comp.getCompletions === sqlCompleterWithDB.getCompletions)
+    );
+
+    sqlEditor.completers = [...nonSQLCompleters, sqlCompleterWithDB];
+
+    console.log('✅ [DEBUG] SQL自动补全已更新，包含数据库结构');
+}
+
+// 获取表名建议
+function getTableSuggestions(prefix, context) {
+    if (!currentDbStructure) return [];
+
+    const tableNames = Object.keys(currentDbStructure.tables);
+
+    return tableNames
+        .filter(tableName => tableName.toLowerCase().startsWith(prefix.toLowerCase()))
+        .map(tableName => ({
+            caption: tableName,
+            value: tableName,
+            meta: 'table',
+            doc: `表: ${tableName}`,
+            score: 1000
+        }));
+}
+
+// 获取SELECT字段建议
+function getSelectFieldSuggestions(prefix, context) {
+    let suggestions = [];
+
+    // 添加通用的SQL关键字和函数
+    const generalKeywords = [
+        { caption: '*', value: '*', meta: 'wildcard', doc: '所有字段', score: 1000 },
+        { caption: 'DISTINCT', value: 'DISTINCT', meta: 'keyword', doc: '去重', score: 900 },
+        { caption: 'COUNT', value: 'COUNT(', meta: 'function', doc: '计数', score: 800 },
+        { caption: 'SUM', value: 'SUM(', meta: 'function', doc: '求和', score: 800 },
+        { caption: 'AVG', value: 'AVG(', meta: 'function', doc: '平均值', score: 800 },
+        { caption: 'MAX', value: 'MAX(', meta: 'function', doc: '最大值', score: 800 },
+        { caption: 'MIN', value: 'MIN(', meta: 'function', doc: '最小值', score: 800 }
+    ];
+
+    suggestions = generalKeywords.filter(item =>
+        item.caption.toLowerCase().startsWith(prefix.toLowerCase())
+    );
+
+    // 如果有数据库结构，添加表字段建议
+    if (currentDbStructure && prefix.length > 0) {
+        const fieldSuggestions = getFieldSuggestions(prefix, context);
+        suggestions = [...suggestions, ...fieldSuggestions];
+    }
+
+    return suggestions;
+}
+
+// 获取字段建议
+function getFieldSuggestions(prefix, context) {
+    if (!currentDbStructure) return [];
+
+    let fieldSuggestions = [];
+
+    // 遍历所有表，收集匹配的字段
+    Object.entries(currentDbStructure.tables).forEach(([tableName, tableInfo]) => {
+        tableInfo.columns.forEach(column => {
+            if (column.name.toLowerCase().includes(prefix.toLowerCase())) {
+                // 精确匹配得分更高
+                const score = column.name.toLowerCase().startsWith(prefix.toLowerCase()) ? 950 : 850;
+
+                fieldSuggestions.push({
+                    caption: column.name,
+                    value: column.name,
+                    meta: 'field',
+                    doc: `${tableName}.${column.name} (${column.type})`,
+                    score: score
+                });
+            }
+        });
+    });
+
+    return fieldSuggestions;
+}
+
+// 获取WHERE子句字段建议
+function getWhereFieldSuggestions(prefix, context) {
+    let suggestions = [];
+
+    // 添加WHERE子句关键字
+    const whereKeywords = [
+        { caption: 'AND', value: 'AND', meta: 'operator', doc: '逻辑与', score: 900 },
+        { caption: 'OR', value: 'OR', meta: 'operator', doc: '逻辑或', score: 900 },
+        { caption: 'NOT', value: 'NOT', meta: 'operator', doc: '逻辑非', score: 900 },
+        { caption: 'IN', value: 'IN', meta: 'operator', doc: '在...中', score: 900 },
+        { caption: 'LIKE', value: 'LIKE', meta: 'operator', doc: '模糊匹配', score: 900 },
+        { caption: 'BETWEEN', value: 'BETWEEN', meta: 'operator', doc: '在...之间', score: 900 },
+        { caption: 'IS NULL', value: 'IS NULL', meta: 'operator', doc: '为空', score: 900 },
+        { caption: 'IS NOT NULL', value: 'IS NOT NULL', meta: 'operator', doc: '不为空', score: 900 }
+    ];
+
+    suggestions = whereKeywords.filter(item =>
+        item.caption.toLowerCase().startsWith(prefix.toLowerCase())
+    );
+
+    // 添加字段建议
+    if (currentDbStructure) {
+        const fieldSuggestions = getFieldSuggestions(prefix, context);
+        suggestions = [...suggestions, ...fieldSuggestions];
+    }
+
+    return suggestions;
+}
+
+// 获取INSERT字段建议
+function getInsertFieldSuggestions(prefix, context) {
+    if (!currentDbStructure) return [];
+
+    // 尝试从INSERT语句中提取表名
+    const match = context.textBefore.match(/INSERT\s+INTO\s+(\w+)/i);
+    const tableName = match ? match[1] : null;
+
+    if (tableName && currentDbStructure.tables[tableName]) {
+        // 返回特定表的字段
+        return currentDbStructure.tables[tableName].columns
+            .filter(column => column.name.toLowerCase().includes(prefix.toLowerCase()))
+            .map(column => ({
+                caption: column.name,
+                value: column.name,
+                meta: 'field',
+                doc: `${tableName}.${column.name} (${column.type})`,
+                score: 1000
+            }));
+    } else {
+        // 返回所有字段
+        return getFieldSuggestions(prefix, context);
+    }
+}
+
+// 获取UPDATE字段建议
+function getUpdateFieldSuggestions(prefix, context) {
+    if (!currentDbStructure) return [];
+
+    // 尝试从UPDATE语句中提取表名
+    const match = context.textBefore.match(/UPDATE\s+(\w+)/i);
+    const tableName = match ? match[1] : null;
+
+    if (tableName && currentDbStructure.tables[tableName]) {
+        // 返回特定表的字段
+        return currentDbStructure.tables[tableName].columns
+            .filter(column => column.name.toLowerCase().includes(prefix.toLowerCase()))
+            .map(column => ({
+                caption: column.name,
+                value: column.name,
+                meta: 'field',
+                doc: `${tableName}.${column.name} (${column.type})`,
+                score: 1000
+            }));
+    } else {
+        // 返回所有字段
+        return getFieldSuggestions(prefix, context);
     }
 }
 
@@ -7132,24 +7465,49 @@ function setupSQLAutocompletion() {
 
 // SQL上下文分析函数
 function analyzeSQLContext(line, column) {
-    const textBefore = line.substring(0, column).toUpperCase();
-    const words = textBefore.trim().split(/\s+/);
+    const textBefore = line.substring(0, column).toLowerCase();
+    const words = textBefore.trim().split(/\s+/).filter(w => w);
 
     let statementType = 'GENERAL';
-    if (textBefore.includes('CREATE TABLE')) {
+    let clauseType = '';
+
+    // 检测语句类型
+    if (textBefore.includes('create table')) {
         statementType = 'CREATE_TABLE';
-    } else if (textBefore.includes('INSERT INTO')) {
+    } else if (textBefore.includes('insert into')) {
         statementType = 'INSERT';
-    } else if (textBefore.includes('SELECT')) {
+    } else if (textBefore.includes('update')) {
+        statementType = 'UPDATE';
+    } else if (textBefore.includes('delete from')) {
+        statementType = 'DELETE';
+    } else if (textBefore.includes('select')) {
         statementType = 'SELECT';
-    } else if (textBefore.includes('WHERE')) {
-        statementType = 'WHERE';
-    } else if (textBefore.includes('JOIN') || textBefore.includes('LEFT JOIN') || textBefore.includes('RIGHT JOIN')) {
-        statementType = 'JOIN';
+
+        // 检测SELECT语句的子句类型
+        const lastKeywords = [];
+        for (let i = words.length - 1; i >= 0; i--) {
+            if (['select', 'from', 'where', 'join', 'inner', 'left', 'right', 'group', 'order', 'having', 'limit'].includes(words[i])) {
+                lastKeywords.push(words[i]);
+            }
+        }
+
+        if (lastKeywords.includes('from') || lastKeywords.includes('join')) {
+            clauseType = 'FROM';
+        } else if (lastKeywords.includes('where')) {
+            clauseType = 'WHERE';
+        } else if (lastKeywords.includes('select') && !lastKeywords.includes('from')) {
+            clauseType = 'SELECT';
+        }
+    }
+
+    // 检测是否在JOIN子句中
+    if (textBefore.includes('join') || textBefore.includes('left join') || textBefore.includes('right join') || textBefore.includes('inner join')) {
+        clauseType = clauseType || 'JOIN';
     }
 
     return {
         statementType: statementType,
+        clauseType: clauseType,
         currentWord: words[words.length - 1] || '',
         words: words,
         textBefore: textBefore,
@@ -7352,12 +7710,12 @@ $(document).ready(function() {
         console.error('❌ [DEBUG] 编辑器未初始化，无法配置选项');
     }
 
-    // 5秒后自动测试Redis自动补全
-    console.log('⏳ [DEBUG] 5秒后将开始自动测试Redis自动补全功能...');
-    setTimeout(() => {
-        console.log('🧪 [DEBUG] 开始自动测试Redis自动补全...');
-        testRedisAutocompletion();
-    }, 5000);
+    // 禁用自动测试Redis自动补全功能，避免干扰用户操作
+    // console.log('⏳ [DEBUG] 5秒后将开始自动测试Redis自动补全功能...');
+    // setTimeout(() => {
+    //     console.log('🧪 [DEBUG] 开始自动测试Redis自动补全...');
+    //     testRedisAutocompletion();
+    // }, 5000);
 
     console.log('🎉 [DEBUG] 页面初始化完成，等待用户操作或自动测试...');
 });
