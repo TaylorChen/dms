@@ -86,7 +86,8 @@ async function initializeApp() {
         const mysqlConnection = connections.find(conn => conn.type === 'mysql');
         const preferredConnection = mysqlConnection || connections[0];
 
-        if (preferredConnection.autoConnect) {
+        // 强制自动连接MySQL连接，如果没有autoConnect属性则默认为true
+        if (preferredConnection.type === 'mysql' || preferredConnection.autoConnect) {
             setTimeout(() => {
                 console.log(`🔄 [DEBUG] 自动连接到 ${preferredConnection.name} (${preferredConnection.type})`);
                 selectConnection(preferredConnection.id);
@@ -101,9 +102,10 @@ async function loadConnections() {
         const response = await fetch('/data/sources.json');
         if (response.ok) {
             const data = await response.json();
-            // 转换数据格式
+            // 转换数据格式，保存原始key用于删除操作
             connections = data.map(([name, config]) => ({
                 id: config.id,
+                key: name, // 保存原始key用于删除
                 name: config.name,
                 type: config.type,
                 config: config.config,
@@ -1054,10 +1056,7 @@ async function selectConnection(connectionId) {
     }
 
     // 加载数据库结构
-    const selectedDatabase = $('#currentDatabase').val();
-    if (selectedDatabase && selectedDatabase !== '选择数据库') {
-        await loadDatabaseStructure(connectionId, selectedDatabase);
-    }
+    await loadDatabaseStructure();
 
     // 更新数据库选择器（使用loadDatabases函数确保一致性）
     await loadDatabases(connectionId);
@@ -1072,10 +1071,39 @@ async function removeConnection(connectionId, event) {
     }
 
     try {
+        // 获取连接信息以获取连接名称
+        const connection = connections.find(conn => conn.id === connectionId);
+        if (!connection) {
+            showErrorMessage('连接不存在');
+            return;
+        }
+
         // 先断开连接
         await fetch(`/api/disconnect/${connectionId}`, {
             method: 'DELETE'
         });
+
+        // 从服务器删除数据源（使用连接ID）
+        console.log('🗑️ [DEBUG] 尝试删除数据源，connectionId:', connectionId);
+        const deleteResponse = await fetch(`/api/datasources/id/${connectionId}`, {
+            method: 'DELETE'
+        });
+
+        if (!deleteResponse.ok) {
+            const errorText = await deleteResponse.text();
+            console.error('❌ [DEBUG] 删除数据源失败:', {
+                status: deleteResponse.status,
+                error: errorText,
+                connectionId: connectionId
+            });
+            throw new Error(`删除服务器数据源失败 (${deleteResponse.status}): ${errorText}`);
+        }
+
+        const deleteResult = await deleteResponse.json();
+        if (!deleteResult.success) {
+            console.error('删除数据源返回错误:', deleteResult);
+            throw new Error(deleteResult.error || '删除数据源失败');
+        }
 
         // 从连接列表中移除
         connections = connections.filter(conn => conn.id !== connectionId);
@@ -1199,10 +1227,20 @@ function updateConnectionSelectors() {
             selector.val(mysqlConnection.id);
             currentConnectionId = mysqlConnection.id;
             console.log(`🔄 [DEBUG] 设置默认连接为MySQL: ${mysqlConnection.name}`);
+            // 自动加载数据库结构
+            setTimeout(() => {
+                console.log('🔄 [DEBUG] 自动加载数据库结构...');
+                loadDatabaseStructure();
+            }, 100);
         } else if (connections.length > 0) {
             selector.val(connections[0].id);
             currentConnectionId = connections[0].id;
             console.log(`🔄 [DEBUG] 设置默认连接为第一个: ${connections[0].name}`);
+            // 自动加载数据库结构
+            setTimeout(() => {
+                console.log('🔄 [DEBUG] 自动加载数据库结构...');
+                loadDatabaseStructure();
+            }, 100);
         }
     }
 }
@@ -1292,7 +1330,10 @@ function displayQueryResults(data, meta) {
     `;
 
     columns.forEach(col => {
-        tableHTML += `<th>${col}</th>`;
+        tableHTML += `<th class="sortable-column" data-column="${col}" title="点击排序">
+                        ${col}
+                        <span class="sort-indicator"></span>
+                      </th>`;
     });
 
     tableHTML += `
@@ -2176,7 +2217,10 @@ function displayTableData(data) {
         return;
     }
 
+    // 保存当前表数据到全局变量，用于编辑
+    currentTableData = data;
     const columns = Object.keys(data.rows[0]);
+
     let tableHTML = `
         <table class="table table-striped table-hover" id="dataTable">
             <thead>
@@ -2184,7 +2228,10 @@ function displayTableData(data) {
     `;
 
     columns.forEach(col => {
-        tableHTML += `<th>${col}</th>`;
+        tableHTML += `<th class="sortable-column" data-column="${col}" title="点击排序">
+                        ${col}
+                        <span class="sort-indicator"></span>
+                      </th>`;
     });
 
     tableHTML += `
@@ -2193,11 +2240,20 @@ function displayTableData(data) {
             <tbody>
     `;
 
-    data.rows.forEach(row => {
-        tableHTML += '<tr>';
+    data.rows.forEach((row, rowIndex) => {
+        tableHTML += `<tr data-row-index="${rowIndex}">`;
         columns.forEach(col => {
             const value = row[col];
-            tableHTML += `<td>${value !== null ? value : '<em>NULL</em>'}</td>`;
+            const displayValue = value !== null ? value : '<em>NULL</em>';
+
+            // 系统字段不可编辑
+            const systemFields = ['id', 'created_at', 'updated_at', 'created_by', 'updated_by'];
+            const isEditable = !systemFields.includes(col.toLowerCase());
+
+            tableHTML += `<td data-column="${col}" data-row-index="${rowIndex}"
+                             class="${isEditable ? 'editable-cell' : ''}"
+                             style="${isEditable ? 'cursor: pointer;' : 'cursor: default; background-color: #f8f9fa;'}"
+                             title="${isEditable ? '双击编辑' : '系统字段不可编辑'}">${displayValue}</td>`;
         });
         tableHTML += '</tr>';
     });
@@ -2211,6 +2267,12 @@ function displayTableData(data) {
     `;
 
     container.html(tableHTML);
+
+    // 绑定双击编辑事件
+    bindInlineEditEvents();
+
+    // 绑定列排序事件
+    bindColumnSortEvents();
 
     // 初始化DataTables
     if (dataTable) {
@@ -4528,8 +4590,6 @@ function repeatOperation(historyId) {
     }
 }
 
-// 加载连接数据
-// 加载连接
 async function loadConnections() {
     // 首先从localStorage加载现有连接
     const keys = ['savedConnections', 'connections', 'dbConnections'];
@@ -6521,13 +6581,13 @@ function onDatabaseChange() {
             $(this).append('<option value="">选择表</option>');
         });
         // 获取数据库结构以用于自动补全和表选择器更新
-        loadDatabaseStructure(connectionId, database);
+        loadDatabaseStructureForAutoComplete(connectionId, database);
         showNotification(`已切换到MySQL数据库 ${database}`, 'info');
     }
 }
 
 // 获取数据库结构用于自动补全
-async function loadDatabaseStructure(connectionId, database) {
+async function loadDatabaseStructureForAutoComplete(connectionId, database) {
     const cacheKey = `${connectionId}_${database}`;
 
     // 检查缓存
@@ -7719,3 +7779,1622 @@ $(document).ready(function() {
 
     console.log('🎉 [DEBUG] 页面初始化完成，等待用户操作或自动测试...');
 });
+
+// ========== 内联数据编辑功能 ==========
+
+let currentTableData = null;
+let editingCell = null;
+
+// 绑定内联编辑事件
+function bindInlineEditEvents() {
+    // 双击单元格编辑
+    $(document).on('dblclick', '.editable-cell', function() {
+        if (editingCell) {
+            // 如果有正在编辑的单元格，先保存
+            saveCellEdit();
+        }
+        startCellEdit($(this));
+    });
+
+    // 点击其他地方保存编辑
+    $(document).on('click', function(e) {
+        if (editingCell && !$(e.target).closest('.editable-cell, .cell-edit-input').length) {
+            saveCellEdit();
+        }
+    });
+
+    // Enter键保存编辑
+    $(document).on('keydown', function(e) {
+        if (e.key === 'Enter' && editingCell) {
+            saveCellEdit();
+        }
+    });
+
+    // Esc键取消编辑
+    $(document).on('keydown', function(e) {
+        if (e.key === 'Escape' && editingCell) {
+            cancelCellEdit();
+        }
+    });
+}
+
+// 开始编辑单元格
+function startCellEdit(cell) {
+    editingCell = cell;
+    const originalValue = cell.text().trim();
+    const columnName = cell.data('column');
+    const rowIndex = parseInt(cell.data('row-index'));
+
+    // 调试信息
+    console.log('startCellEdit:', { columnName, originalValue, rowIndex });
+
+    // 检查是否为NULL值
+    let inputValue = originalValue === 'NULL' ? '' : originalValue;
+
+    // 创建编辑输入框
+    const inputType = getInputTypeForColumn(columnName);
+    const input = $(`<input type="${inputType}" class="form-control form-control-sm cell-edit-input"
+                         value="${inputValue}" style="width: 100%; padding: 2px;">`);
+
+    // 替换单元格内容
+    cell.empty().append(input);
+    input.focus().select();
+
+    // 存储原始值
+    cell.data('original-value', originalValue);
+    cell.data('column-name', columnName);
+    cell.data('row-index', rowIndex);
+
+    // 添加编辑样式
+    cell.addClass('editing-cell');
+}
+
+// 保存单元格编辑
+function saveCellEdit() {
+    if (!editingCell) return;
+
+    const input = editingCell.find('.cell-edit-input');
+    const newValue = input.val();
+    const originalValue = editingCell.data('original-value');
+    const columnName = editingCell.data('column-name');
+    const rowIndex = editingCell.data('row-index');
+
+    // 如果值没有变化，恢复原始显示
+    if (newValue === originalValue || (newValue === '' && originalValue === 'NULL')) {
+        restoreCellDisplay(editingCell, originalValue);
+        editingCell = null;
+        return;
+    }
+
+    // 准备更新数据
+    const rowData = currentTableData.rows[rowIndex];
+    const primaryKey = getPrimaryKeyForRow(rowData);
+
+    if (!primaryKey) {
+        showNotification('无法找到主键，无法保存数据', 'error');
+        restoreCellDisplay(editingCell, originalValue);
+        editingCell = null;
+        return;
+    }
+
+    // 发送更新请求
+    updateTableData(editingCell, columnName, newValue, primaryKey, originalValue);
+}
+
+// 取消单元格编辑
+function cancelCellEdit() {
+    if (!editingCell) return;
+
+    const originalValue = editingCell.data('original-value');
+    restoreCellDisplay(editingCell, originalValue);
+    editingCell = null;
+}
+
+// 恢复单元格显示
+function restoreCellDisplay(cell, value) {
+    const displayValue = value === '' || value === null ? '<em>NULL</em>' : value;
+    cell.html(displayValue).removeClass('editing-cell');
+}
+
+// 根据列名获取输入框类型
+function getInputTypeForColumn(columnName) {
+    const name = columnName.toLowerCase();
+    if (name.includes('id') || name.includes('key')) {
+        return 'number';
+    } else if (name.includes('date') || name.includes('time')) {
+        return 'date';
+    } else if (name.includes('email')) {
+        return 'email';
+    } else if (name.includes('price') || name.includes('amount') || name.includes('money')) {
+        return 'number';
+    } else if (name.includes('is_') || name.includes('has_') || name.includes('enabled')) {
+        return 'checkbox';
+    } else {
+        return 'text';
+    }
+}
+
+// 获取行数据的主键
+function getPrimaryKeyForRow(rowData) {
+    const table = $('#tableSelector').val().split('.')[1]; // 从"database.table"中提取表名
+
+    // 特殊处理 grid_cells 表
+    if (table === 'grid_cells') {
+        return {
+            column: 'row_id',
+            value: rowData.row_id,
+            secondColumn: 'col_id',
+            secondValue: rowData.col_id,
+            isComposite: true
+        };
+    }
+
+    // 查找常见的主键字段名
+    const possibleKeys = ['id', 'ID', 'uuid', 'UUID', 'key', 'KEY'];
+
+    for (const key of possibleKeys) {
+        if (rowData.hasOwnProperty(key)) {
+            return { column: key, value: rowData[key] };
+        }
+    }
+
+    // 如果没有找到，查找第一个字段
+    const columns = Object.keys(rowData);
+    if (columns.length > 0) {
+        return { column: columns[0], value: rowData[columns[0]] };
+    }
+
+    return null;
+}
+
+// 更新表数据
+async function updateTableData(cell, columnName, newValue, primaryKey, originalValue) {
+    try {
+        const connectionId = currentConnectionId;
+        const database = $('#currentDatabase').val();
+        const table = $('#tableSelector').val().split('.')[1]; // 从"database.table"中提取表名
+
+        // 调试信息
+        console.log('updateTableData:', {
+            columnName,
+            newValue,
+            primaryKey,
+            originalValue,
+            table,
+            database
+        });
+
+        if (!connectionId || !database || !table) {
+            showNotification('缺少必要的连接信息', 'error');
+            return;
+        }
+
+        // 构建UPDATE语句
+        let updateSQL, params;
+
+        if (primaryKey.isComposite) {
+            // 处理复合主键 (grid_cells 表)
+            updateSQL = `UPDATE \`${table}\` SET \`${columnName}\` = ? WHERE \`${primaryKey.column}\` = ? AND \`${primaryKey.secondColumn}\` = ?`;
+            params = [newValue, primaryKey.value, primaryKey.secondValue];
+        } else {
+            // 处理单个主键
+            updateSQL = `UPDATE \`${table}\` SET \`${columnName}\` = ? WHERE \`${primaryKey.column}\` = ?`;
+            params = [newValue, primaryKey.value];
+        }
+
+        // 调试信息
+        console.log('Generated SQL:', updateSQL);
+        console.log('SQL Params:', params);
+
+        const response = await fetch(`/api/query/${connectionId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                sql: updateSQL,
+                params: params,
+                database: database
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            // 更新成功，更新显示
+            const displayValue = newValue === '' || newValue === null ? '<em>NULL</em>' : newValue;
+            cell.html(displayValue).removeClass('editing-cell');
+
+            // 更新内存中的数据
+            if (currentTableData && currentTableData.rows) {
+                const rowIndex = parseInt(cell.data('row-index'));
+                currentTableData.rows[rowIndex][columnName] = newValue;
+            }
+
+            showNotification('数据更新成功', 'success');
+            editingCell = null;
+        } else {
+            throw new Error(result.error || '更新失败');
+        }
+    } catch (error) {
+        console.error('更新数据失败:', error);
+        showNotification('数据更新失败: ' + error.message, 'error');
+        restoreCellDisplay(cell, originalValue);
+        editingCell = null;
+    }
+}
+
+// ========== 高级数据过滤功能 ==========
+
+// 高级过滤相关变量
+let advancedFilterRules = [];
+let currentTableColumns = [];
+
+// 切换高级过滤面板
+function toggleAdvancedFilter() {
+    const panel = $('#advancedFilterPanel');
+    if (panel.is(':visible')) {
+        panel.hide();
+    } else {
+        panel.show();
+        if (advancedFilterRules.length === 0) {
+            addFilterRule();
+        }
+    }
+}
+
+// 添加过滤规则
+function addFilterRule() {
+    const container = $('#filterRulesContainer');
+    const ruleId = Date.now();
+
+    if (!currentTableColumns.length && currentTableData) {
+        currentTableColumns = Object.keys(currentTableData.rows[0] || {});
+    }
+
+    const operators = [
+        { value: '=', text: '等于' },
+        { value: '!=', text: '不等于' },
+        { value: '>', text: '大于' },
+        { value: '>=', text: '大于等于' },
+        { value: '<', text: '小于' },
+        { value: '<=', text: '小于等于' },
+        { value: 'LIKE', text: '包含' },
+        { value: 'NOT LIKE', text: '不包含' },
+        { value: 'IN', text: '在列表中' },
+        { value: 'NOT IN', text: '不在列表中' },
+        { value: 'IS NULL', text: '为空' },
+        { value: 'IS NOT NULL', text: '不为空' }
+    ];
+
+    const logicOperators = [
+        { value: 'AND', text: '并且' },
+        { value: 'OR', text: '或者' }
+    ];
+
+    const ruleHtml = `
+        <div class="filter-rule row mb-2 align-items-center" data-rule-id="${ruleId}">
+            <div class="col-md-2">
+                ${advancedFilterRules.length > 0 ? `
+                    <select class="form-select form-select-sm logic-operator">
+                        ${logicOperators.map(op => `<option value="${op.value}">${op.text}</option>`).join('')}
+                    </select>
+                ` : '<span class="text-muted">条件</span>'}
+            </div>
+            <div class="col-md-3">
+                <select class="form-select form-select-sm column-name">
+                    <option value="">选择列</option>
+                    ${currentTableColumns.map(col => `<option value="${col}">${col}</option>`).join('')}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <select class="form-select form-select-sm operator">
+                    ${operators.map(op => `<option value="${op.value}">${op.text}</option>`).join('')}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <input type="text" class="form-control form-control-sm filter-value" placeholder="过滤值">
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-sm btn-outline-danger" onclick="removeFilterRule(${ruleId})">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    container.append(ruleHtml);
+
+    // 添加到规则数组
+    advancedFilterRules.push({
+        id: ruleId,
+        logic: advancedFilterRules.length > 0 ? 'AND' : null,
+        column: '',
+        operator: '=',
+        value: ''
+    });
+
+    // 绑定事件
+    bindFilterRuleEvents(ruleId);
+}
+
+// 移除过滤规则
+function removeFilterRule(ruleId) {
+    $(`.filter-rule[data-rule-id="${ruleId}"]`).remove();
+    advancedFilterRules = advancedFilterRules.filter(rule => rule.id !== ruleId);
+}
+
+// 绑定过滤规则事件
+function bindFilterRuleEvents(ruleId) {
+    const ruleElement = $(`.filter-rule[data-rule-id="${ruleId}"]`);
+
+    ruleElement.find('.logic-operator').on('change', function() {
+        const rule = advancedFilterRules.find(r => r.id === ruleId);
+        if (rule) rule.logic = $(this).val();
+    });
+
+    ruleElement.find('.column-name').on('change', function() {
+        const rule = advancedFilterRules.find(r => r.id === ruleId);
+        if (rule) rule.column = $(this).val();
+    });
+
+    ruleElement.find('.operator').on('change', function() {
+        const rule = advancedFilterRules.find(r => r.id === ruleId);
+        if (rule) rule.operator = $(this).val();
+
+        // 处理不需要值的操作符
+        const valueInput = ruleElement.find('.filter-value');
+        if ($(this).val() === 'IS NULL' || $(this).val() === 'IS NOT NULL') {
+            valueInput.prop('disabled', true).val('');
+        } else {
+            valueInput.prop('disabled', false);
+        }
+    });
+
+    ruleElement.find('.filter-value').on('input', function() {
+        const rule = advancedFilterRules.find(r => r.id === ruleId);
+        if (rule) rule.value = $(this).val();
+    });
+}
+
+// 应用高级过滤
+function applyAdvancedFilter() {
+    if (!currentTableData) {
+        showNotification('请先选择表并加载数据', 'warning');
+        return;
+    }
+
+    // 更新规则数据
+    advancedFilterRules.forEach(rule => {
+        const ruleElement = $(`.filter-rule[data-rule-id="${rule.id}"]`);
+        rule.logic = ruleElement.find('.logic-operator').val();
+        rule.column = ruleElement.find('.column-name').val();
+        rule.operator = ruleElement.find('.operator').val();
+        rule.value = ruleElement.find('.filter-value').val();
+    });
+
+    // 验证规则
+    const validRules = advancedFilterRules.filter(rule => {
+        if (!rule.column || !rule.operator) return false;
+        if (rule.operator !== 'IS NULL' && rule.operator !== 'IS NOT NULL' && !rule.value) return false;
+        return true;
+    });
+
+    if (validRules.length === 0) {
+        showNotification('请设置有效的过滤条件', 'warning');
+        return;
+    }
+
+    // 执行过滤
+    const filteredData = applyFilterRules(currentTableData.rows, validRules);
+
+    // 更新表格显示
+    updateTableWithFilteredData(filteredData);
+
+    showNotification(`已应用过滤条件，显示 ${filteredData.length} 条记录`, 'success');
+}
+
+// 应用过滤规则到数据
+function applyFilterRules(data, rules) {
+    return data.filter(row => {
+        return rules.every(rule => {
+            const columnValue = row[rule.column];
+            const filterValue = rule.value;
+
+            switch (rule.operator) {
+                case '=':
+                    return columnValue == filterValue;
+                case '!=':
+                    return columnValue != filterValue;
+                case '>':
+                    return parseFloat(columnValue) > parseFloat(filterValue);
+                case '>=':
+                    return parseFloat(columnValue) >= parseFloat(filterValue);
+                case '<':
+                    return parseFloat(columnValue) < parseFloat(filterValue);
+                case '<=':
+                    return parseFloat(columnValue) <= parseFloat(filterValue);
+                case 'LIKE':
+                    return String(columnValue).toLowerCase().includes(filterValue.toLowerCase());
+                case 'NOT LIKE':
+                    return !String(columnValue).toLowerCase().includes(filterValue.toLowerCase());
+                case 'IN':
+                    const inValues = filterValue.split(',').map(v => v.trim());
+                    return inValues.includes(String(columnValue));
+                case 'NOT IN':
+                    const notInValues = filterValue.split(',').map(v => v.trim());
+                    return !notInValues.includes(String(columnValue));
+                case 'IS NULL':
+                    return columnValue === null || columnValue === undefined;
+                case 'IS NOT NULL':
+                    return columnValue !== null && columnValue !== undefined;
+                default:
+                    return true;
+            }
+        });
+    });
+}
+
+// 更新表格显示过滤后的数据
+function updateTableWithFilteredData(filteredData) {
+    if (!currentTableData) return;
+
+    const container = $('#dataTableContainer');
+    const columns = Object.keys(currentTableData.rows[0] || {});
+
+    let tableHTML = `
+        <table class="table table-striped table-hover" id="dataTable">
+            <thead>
+                <tr>
+    `;
+
+    columns.forEach(col => {
+        tableHTML += `<th class="sortable-column" data-column="${col}" title="点击排序">
+                        ${col}
+                        <span class="sort-indicator"></span>
+                      </th>`;
+    });
+
+    tableHTML += `
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    filteredData.forEach((row, rowIndex) => {
+        tableHTML += `<tr data-row-index="${rowIndex}">`;
+        columns.forEach(col => {
+            const value = row[col];
+            const displayValue = value !== null ? value : '<em>NULL</em>';
+            tableHTML += `<td data-column="${col}" data-row-index="${rowIndex}"
+                             class="editable-cell"
+                             style="cursor: pointer;"
+                             title="双击编辑">${displayValue}</td>`;
+        });
+        tableHTML += '</tr>';
+    });
+
+    tableHTML += `
+            </tbody>
+        </table>
+        <div class="text-muted">
+            共 ${filteredData.length} 条记录（过滤后），
+            总计 ${currentTableData.pagination.total} 条记录
+        </div>
+    `;
+
+    container.html(tableHTML);
+
+    // 重新绑定编辑事件
+    bindInlineEditEvents();
+
+    // 重新初始化DataTables
+    if (dataTable) {
+        dataTable.destroy();
+    }
+    dataTable = $('#dataTable').DataTable({
+        responsive: true,
+        pageLength: 25,
+        lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "全部"]]
+    });
+}
+
+// 清除高级过滤
+function clearAdvancedFilter() {
+    advancedFilterRules = [];
+    $('#filterRulesContainer').empty();
+
+    // 重新显示原始数据
+    if (currentTableData) {
+        displayTableData(currentTableData);
+    }
+
+    showNotification('已清除过滤条件', 'info');
+}
+
+// 在表数据加载时更新列信息
+function updateCurrentTableColumns(data) {
+    if (data && data.rows && data.rows.length > 0) {
+        currentTableColumns = Object.keys(data.rows[0]);
+    }
+}
+
+// 修改原有的 loadTableData 函数，添加列信息更新
+$(document).ready(function() {
+    // 保存原始的 loadTableData 函数
+    const originalLoadTableData = window.loadTableData;
+
+    window.loadTableData = function() {
+        // 调用原始函数
+        originalLoadTableData.apply(this, arguments);
+
+        // 延迟更新列信息，等待数据加载完成
+        setTimeout(() => {
+            if (currentTableData) {
+                updateCurrentTableColumns(currentTableData);
+            }
+        }, 100);
+    };
+});
+
+// ========== 列排序功能 ==========
+
+// 列排序相关变量
+let currentSortColumn = null;
+let currentSortDirection = 'asc'; // 'asc' 或 'desc'
+
+// 绑定列排序事件
+function bindColumnSortEvents() {
+    $(document).off('click', '.sortable-column').on('click', '.sortable-column', function() {
+        const columnName = $(this).data('column');
+        handleColumnSort(columnName);
+    });
+}
+
+// 处理列排序
+function handleColumnSort(columnName) {
+    if (!currentTableData) return;
+
+    // 确定排序方向
+    if (currentSortColumn === columnName) {
+        currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentSortColumn = columnName;
+        currentSortDirection = 'asc';
+    }
+
+    // 执行排序
+    const sortedData = sortTableData(currentTableData.rows, columnName, currentSortDirection);
+
+    // 更新表格显示
+    updateTableWithSortedData(sortedData);
+
+    // 更新排序指示器
+    updateSortIndicators(columnName, currentSortDirection);
+
+    showNotification(`已按 ${columnName} ${currentSortDirection === 'asc' ? '升序' : '降序'} 排序`, 'success');
+}
+
+// 排序表格数据
+function sortTableData(data, columnName, direction) {
+    const sortedData = [...data].sort((a, b) => {
+        let valueA = a[columnName];
+        let valueB = b[columnName];
+
+        // 处理null值
+        if (valueA === null || valueA === undefined) valueA = '';
+        if (valueB === null || valueB === undefined) valueB = '';
+
+        // 尝试转换为数字进行比较
+        const numA = parseFloat(valueA);
+        const numB = parseFloat(valueB);
+
+        let comparison = 0;
+
+        if (!isNaN(numA) && !isNaN(numB)) {
+            // 数字比较
+            comparison = numA - numB;
+        } else if (typeof valueA === 'string' && typeof valueB === 'string') {
+            // 字符串比较（不区分大小写）
+            comparison = valueA.localeCompare(valueB, 'zh-CN', { sensitivity: 'base' });
+        } else {
+            // 其他类型转换为字符串比较
+            comparison = String(valueA).localeCompare(String(valueB));
+        }
+
+        return direction === 'asc' ? comparison : -comparison;
+    });
+
+    return sortedData;
+}
+
+// 更新表格显示排序后的数据
+function updateTableWithSortedData(sortedData) {
+    if (!currentTableData) return;
+
+    const container = $('#dataTableContainer');
+    const columns = Object.keys(currentTableData.rows[0] || {});
+
+    let tableHTML = `
+        <table class="table table-striped table-hover" id="dataTable">
+            <thead>
+                <tr>
+    `;
+
+    columns.forEach(col => {
+        const sortClass = currentSortColumn === col ? `sort-${currentSortDirection}` : '';
+        const sortIndicator = currentSortColumn === col ?
+            `<span class="sort-indicator ${sortClass}"></span>` :
+            '<span class="sort-indicator"></span>';
+
+        tableHTML += `<th class="sortable-column ${sortClass}" data-column="${col}" title="点击排序">
+                        ${col}
+                        ${sortIndicator}
+                      </th>`;
+    });
+
+    tableHTML += `
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    sortedData.forEach((row, rowIndex) => {
+        tableHTML += `<tr data-row-index="${rowIndex}">`;
+        columns.forEach(col => {
+            const value = row[col];
+            const displayValue = value !== null ? value : '<em>NULL</em>';
+            tableHTML += `<td data-column="${col}" data-row-index="${rowIndex}"
+                             class="editable-cell"
+                             style="cursor: pointer;"
+                             title="双击编辑">${displayValue}</td>`;
+        });
+        tableHTML += '</tr>';
+    });
+
+    tableHTML += `
+            </tbody>
+        </table>
+        <div class="text-muted">
+            共 ${sortedData.length} 条记录${currentSortColumn ? `（按 ${currentSortColumn} ${currentSortDirection === 'asc' ? '升序' : '降序'} 排序）` : ''}，
+            总计 ${currentTableData.pagination.total} 条记录
+        </div>
+    `;
+
+    container.html(tableHTML);
+
+    // 重新绑定事件
+    bindInlineEditEvents();
+    bindColumnSortEvents();
+
+    // 重新初始化DataTables
+    if (dataTable) {
+        dataTable.destroy();
+    }
+    dataTable = $('#dataTable').DataTable({
+        responsive: true,
+        pageLength: 25,
+        lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "全部"]]
+    });
+}
+
+// 更新排序指示器
+function updateSortIndicators(columnName, direction) {
+    // 移除所有排序指示器
+    $('.sortable-column').removeClass('sort-asc sort-desc');
+    $('.sort-indicator').removeClass('sort-asc sort-desc');
+
+    // 添加当前列的排序指示器
+    const currentColumn = $(`.sortable-column[data-column="${columnName}"]`);
+    currentColumn.addClass(`sort-${direction}`);
+    currentColumn.find('.sort-indicator').addClass(`sort-${direction}`);
+}
+
+// 重置排序
+function resetColumnSort() {
+    currentSortColumn = null;
+    currentSortDirection = 'asc';
+
+    if (currentTableData) {
+        displayTableData(currentTableData);
+    }
+
+    showNotification('已重置排序', 'info');
+}
+
+// 获取排序状态的字符串表示
+function getSortStatusText() {
+    if (!currentSortColumn) return '未排序';
+    return `按 ${currentSortColumn} ${currentSortDirection === 'asc' ? '升序' : '降序'}`;
+}
+
+// 在数据过滤后保持排序状态
+function applySortToFilteredData(filteredData) {
+    if (currentSortColumn) {
+        return sortTableData(filteredData, currentSortColumn, currentSortDirection);
+    }
+    return filteredData;
+}
+
+// 修改 updateTableWithFilteredData 函数以支持排序
+function updateTableWithFilteredData(filteredData) {
+    if (!currentTableData) return;
+
+    // 应用当前的排序状态
+    const displayData = applySortToFilteredData(filteredData);
+
+    const container = $('#dataTableContainer');
+    const columns = Object.keys(currentTableData.rows[0] || {});
+
+    let tableHTML = `
+        <table class="table table-striped table-hover" id="dataTable">
+            <thead>
+                <tr>
+    `;
+
+    columns.forEach(col => {
+        const sortClass = currentSortColumn === col ? `sort-${currentSortDirection}` : '';
+        const sortIndicator = currentSortColumn === col ?
+            `<span class="sort-indicator ${sortClass}"></span>` :
+            '<span class="sort-indicator"></span>';
+
+        tableHTML += `<th class="sortable-column ${sortClass}" data-column="${col}" title="点击排序">
+                        ${col}
+                        ${sortIndicator}
+                      </th>`;
+    });
+
+    tableHTML += `
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    displayData.forEach((row, rowIndex) => {
+        tableHTML += `<tr data-row-index="${rowIndex}">`;
+        columns.forEach(col => {
+            const value = row[col];
+            const displayValue = value !== null ? value : '<em>NULL</em>';
+            tableHTML += `<td data-column="${col}" data-row-index="${rowIndex}"
+                             class="editable-cell"
+                             style="cursor: pointer;"
+                             title="双击编辑">${displayValue}</td>`;
+        });
+        tableHTML += '</tr>';
+    });
+
+    tableHTML += `
+            </tbody>
+        </table>
+        <div class="text-muted">
+            共 ${displayData.length} 条记录（过滤后）${currentSortColumn ? `，按 ${currentSortColumn} ${currentSortDirection === 'asc' ? '升序' : '降序'} 排序` : ''}，
+            总计 ${currentTableData.pagination.total} 条记录
+        </div>
+    `;
+
+    container.html(tableHTML);
+
+    // 重新绑定事件
+    bindInlineEditEvents();
+    bindColumnSortEvents();
+
+    // 重新初始化DataTables
+    if (dataTable) {
+        dataTable.destroy();
+    }
+    dataTable = $('#dataTable').DataTable({
+        responsive: true,
+        pageLength: 25,
+        lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "全部"]]
+    });
+}
+
+// 获取表结构
+function getTableStructure(tableName, callback) {
+    const [database, table] = tableName.split('.');
+
+    if (!database || !table) {
+        showNotification('表名格式错误', 'error');
+        return;
+    }
+
+    fetch(`/api/structure/${currentConnectionId}/${database}/${table}`)
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                callback(result.data);
+            } else {
+                showNotification('获取表结构失败: ' + result.error, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('获取表结构失败: ' + error.message, 'error');
+        });
+}
+
+// ========== 数据生成器 ==========
+
+// 数据生成器模板
+const dataGeneratorTemplates = {
+    users: {
+        name: '用户数据',
+        fields: {
+            'username': { type: 'username', locale: 'zh_CN' },
+            'name': { type: 'name', locale: 'zh_CN' },
+            'email': { type: 'email' },
+            'phone': { type: 'phone' },
+            'age': { type: 'number', min: 18, max: 80 },
+            'gender': { type: 'enum', values: ['男', '女', '其他'] },
+            'avatar': { type: 'avatar' },
+            'bio': { type: 'text', min: 10, max: 100 },
+            'website': { type: 'website' },
+            'status': { type: 'enum', values: ['active', 'inactive', 'pending'] },
+            'created_at': { type: 'datetime', range: 'past_year' }
+        }
+    },
+    products: {
+        name: '产品数据',
+        fields: {
+            'name': { type: 'product_name', locale: 'zh_CN' },
+            'sku': { type: 'sku' },
+            'price': { type: 'price', min: 10, max: 9999 },
+            'category': { type: 'enum', values: ['电子产品', '服装', '家居', '图书', '食品', '运动'] },
+            'stock': { type: 'number', min: 0, max: 1000 },
+            'description': { type: 'text', min: 20, max: 200 },
+            'brand': { type: 'brand', locale: 'zh_CN' },
+            'weight': { type: 'weight', min: 0.1, max: 50 },
+            'dimensions': { type: 'dimensions' },
+            'is_active': { type: 'boolean' },
+            'rating': { type: 'number', min: 1, max: 5, decimals: 1 }
+        }
+    },
+    orders: {
+        name: '订单数据',
+        fields: {
+            'order_number': { type: 'order_number' },
+            'customer_id': { type: 'number', min: 1, max: 1000 },
+            'total_amount': { type: 'price', min: 50, max: 5000 },
+            'status': { type: 'enum', values: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] },
+            'payment_method': { type: 'enum', values: ['alipay', 'wechat', 'credit_card', 'bank_transfer'] },
+            'shipping_address': { type: 'address', locale: 'zh_CN' },
+            'order_date': { type: 'datetime', range: 'past_month' },
+            'shipping_date': { type: 'datetime', range: 'future_week' },
+            'notes': { type: 'text', min: 0, max: 200 }
+        }
+    },
+    logs: {
+        name: '日志数据',
+        fields: {
+            'timestamp': { type: 'datetime', range: 'past_week' },
+            'level': { type: 'enum', values: ['INFO', 'WARN', 'ERROR', 'DEBUG'] },
+            'message': { type: 'log_message' },
+            'user_id': { type: 'number', min: 1, max: 1000, nullable: true },
+            'ip_address': { type: 'ip_address' },
+            'user_agent': { type: 'user_agent' },
+            'method': { type: 'enum', values: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
+            'path': { type: 'url_path' },
+            'status_code': { type: 'number', min: 200, max: 599 },
+            'response_time': { type: 'number', min: 1, max: 5000 }
+        }
+    },
+    addresses: {
+        name: '地址数据',
+        fields: {
+            'street': { type: 'street', locale: 'zh_CN' },
+            'city': { type: 'city', locale: 'zh_CN' },
+            'province': { type: 'province', locale: 'zh_CN' },
+            'postal_code': { type: 'postal_code', locale: 'zh_CN' },
+            'country': { type: 'country', locale: 'zh_CN' },
+            'latitude': { type: 'latitude' },
+            'longitude': { type: 'longitude' },
+            'timezone': { type: 'timezone' }
+        }
+    }
+};
+
+// 数据生成器配置
+let dataGeneratorConfig = {
+    template: '',
+    fields: {},
+    recordCount: 10,
+    selectedColumns: []
+};
+
+// 显示数据生成器面板
+function showDataGenerator() {
+    const table = $('#tableSelector').val();
+    if (!table) {
+        showNotification('请先选择表', 'warning');
+        return;
+    }
+
+    // 获取表结构
+    getTableStructure(table, function(columns) {
+        renderDataGeneratorPanel(columns);
+        $('#dataGeneratorPanel').show();
+
+        // 滚动到生成器面板
+        $('#dataGeneratorPanel')[0].scrollIntoView({ behavior: 'smooth' });
+    });
+}
+
+// 隐藏数据生成器面板
+function hideDataGenerator() {
+    $('#dataGeneratorPanel').hide();
+}
+
+// 渲染数据生成器面板
+function renderDataGeneratorPanel(columns) {
+    const panel = $('#dataGeneratorPanel');
+
+    // 渲染模板选择器
+    const templateOptions = Object.keys(dataGeneratorTemplates).map(key =>
+        `<option value="${key}">${dataGeneratorTemplates[key].name}</option>`
+    ).join('');
+
+    // 渲染字段配置
+    const fieldsHtml = columns.map(col => {
+        const fieldType = detectFieldType(col);
+        return `
+            <div class="generator-field-config mb-3 p-3 border rounded">
+                <div class="row align-items-center">
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input field-checkbox" type="checkbox"
+                                   id="field_${col.COLUMN_NAME}" data-field="${col.COLUMN_NAME}" checked>
+                            <label class="form-check-label" for="field_${col.COLUMN_NAME}">
+                                <strong>${col.COLUMN_NAME}</strong>
+                                <small class="text-muted d-block">${col.DATA_TYPE}</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select field-type-select" data-field="${col.COLUMN_NAME}">
+                            <option value="auto" ${fieldType === 'auto' ? 'selected' : ''}>自动检测</option>
+                            <option value="number" ${fieldType === 'number' ? 'selected' : ''}>数字</option>
+                            <option value="string" ${fieldType === 'string' ? 'selected' : ''}>字符串</option>
+                            <option value="email" ${fieldType === 'email' ? 'selected' : ''}>邮箱</option>
+                            <option value="phone" ${fieldType === 'phone' ? 'selected' : ''}>电话</option>
+                            <option value="name" ${fieldType === 'name' ? 'selected' : ''}>姓名</option>
+                            <option value="address" ${fieldType === 'address' ? 'selected' : ''}>地址</option>
+                            <option value="date" ${fieldType === 'date' ? 'selected' : ''}>日期</option>
+                            <option value="datetime" ${fieldType === 'datetime' ? 'selected' : ''}>日期时间</option>
+                            <option value="boolean" ${fieldType === 'boolean' ? 'selected' : ''}>布尔值</option>
+                            <option value="credit_card" ${fieldType === 'credit_card' ? 'selected' : ''}>信用卡</option>
+                            <option value="domain" ${fieldType === 'domain' ? 'selected' : ''}>域名</option>
+                            <option value="ip_address" ${fieldType === 'ip_address' ? 'selected' : ''}>IP地址</option>
+                            <option value="regex" ${fieldType === 'regex' ? 'selected' : ''}>正则表达式</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="field-options" data-field="${col.COLUMN_NAME}">
+                            ${renderFieldOptions(col.COLUMN_NAME, fieldType)}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    panel.find('.card-body').html(`
+        <div class="row">
+            <div class="col-md-4">
+                <label class="form-label">选择模板</label>
+                <select class="form-select" id="generatorTemplate">
+                    <option value="">自定义</option>
+                    ${templateOptions}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">生成数量</label>
+                <div class="input-group">
+                    <input type="number" class="form-control" id="generatorCount" value="10" min="1" max="1000">
+                    <span class="input-group-text">条</span>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">操作</label>
+                <div>
+                    <button class="btn btn-primary me-2" onclick="generateData()">生成数据</button>
+                    <button class="btn btn-secondary me-2" onclick="previewData()">预览</button>
+                    <button class="btn btn-success" onclick="applyTemplate()">应用模板</button>
+                </div>
+            </div>
+        </div>
+
+        <hr class="my-4">
+
+        <h6 class="mb-3">字段配置</h6>
+        <div class="generator-fields">
+            ${fieldsHtml}
+        </div>
+
+        <div class="mt-4" id="generatorPreview" style="display: none;">
+            <h6>预览</h6>
+            <div class="preview-container" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #f9f9f9;">
+                <pre class="mb-0"></pre>
+            </div>
+        </div>
+    `);
+
+    // 绑定事件
+    bindGeneratorEvents();
+}
+
+// 检测字段类型
+function detectFieldType(column) {
+    const name = column.COLUMN_NAME.toLowerCase();
+    const type = column.DATA_TYPE.toLowerCase();
+
+    // 根据字段名和类型检测
+    if (name.includes('email') || name.includes('mail')) return 'email';
+    if (name.includes('phone') || name.includes('mobile') || name.includes('tel')) return 'phone';
+    if (name.includes('name') && !name.includes('username')) return 'name';
+    if (name.includes('address') || name.includes('addr')) return 'address';
+    if (name.includes('age') || name.includes('count') || name.includes('num')) return 'number';
+    if (name.includes('date') && !name.includes('update') && !name.includes('create')) return 'date';
+    if (name.includes('time') || name.includes('created_at') || name.includes('updated_at')) return 'datetime';
+    if (name.includes('is_') || name.includes('has_') || type.includes('bool')) return 'boolean';
+    if (name.includes('credit') || name.includes('card')) return 'credit_card';
+    if (name.includes('domain') || name.includes('website')) return 'domain';
+    if (name.includes('ip') || name.includes('addr') && name.includes('ip')) return 'ip_address';
+
+    // 根据数据类型检测
+    if (type.includes('int') || type.includes('decimal') || type.includes('float')) return 'number';
+    if (type.includes('date') || type.includes('time')) return 'datetime';
+    if (type.includes('bool')) return 'boolean';
+
+    return 'string';
+}
+
+// 渲染字段选项
+function renderFieldOptions(fieldName, fieldType) {
+    switch(fieldType) {
+        case 'number':
+            return `
+                <div class="row g-2">
+                    <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" placeholder="最小值"
+                               data-field="${fieldName}" data-option="min" value="1">
+                    </div>
+                    <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" placeholder="最大值"
+                               data-field="${fieldName}" data-option="max" value="100">
+                    </div>
+                </div>
+            `;
+        case 'string':
+        case 'text':
+            return `
+                <div class="row g-2">
+                    <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" placeholder="最小长度"
+                               data-field="${fieldName}" data-option="min" value="5">
+                    </div>
+                    <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" placeholder="最大长度"
+                               data-field="${fieldName}" data-option="max" value="20">
+                    </div>
+                </div>
+            `;
+        case 'regex':
+            return `
+                <input type="text" class="form-control form-control-sm" placeholder="正则表达式"
+                       data-field="${fieldName}" data-option="pattern" value="[A-Za-z0-9]+">
+            `;
+        case 'enum':
+            return `
+                <input type="text" class="form-control form-control-sm" placeholder="选项，用逗号分隔"
+                       data-field="${fieldName}" data-option="values" value="选项1,选项2,选项3">
+            `;
+        default:
+            return `<small class="text-muted">此类型无需额外配置</small>`;
+    }
+}
+
+// 绑定生成器事件
+function bindGeneratorEvents() {
+    // 模板选择
+    $('#generatorTemplate').change(function() {
+        const template = $(this).val();
+        if (template && dataGeneratorTemplates[template]) {
+            applyTemplate(template);
+        }
+    });
+
+    // 字段类型选择
+    $('.field-type-select').change(function() {
+        const field = $(this).data('field');
+        const type = $(this).val();
+        const optionsContainer = $(`.field-options[data-field="${field}"]`);
+        optionsContainer.html(renderFieldOptions(field, type));
+    });
+
+    // 预览数据
+    $(document).on('input', '.field-options input, #generatorCount', function() {
+        if ($('#generatorPreview').is(':visible')) {
+            previewData();
+        }
+    });
+}
+
+// 应用模板
+function applyTemplate(templateName = null) {
+    const template = templateName || $('#generatorTemplate').val();
+    if (!template || !dataGeneratorTemplates[template]) {
+        showNotification('请选择有效的模板', 'warning');
+        return;
+    }
+
+    const templateData = dataGeneratorTemplates[template];
+
+    // 更新字段配置
+    Object.entries(templateData.fields).forEach(([fieldName, config]) => {
+        const fieldCheckbox = $(`#field_${fieldName}`);
+        const typeSelect = $(`.field-type-select[data-field="${fieldName}"]`);
+
+        if (fieldCheckbox.length) {
+            fieldCheckbox.prop('checked', true);
+            typeSelect.val(config.type);
+
+            // 更新选项
+            const optionsContainer = $(`.field-options[data-field="${fieldName}"]`);
+            optionsContainer.html(renderFieldOptions(fieldName, config.type));
+
+            // 设置配置值
+            Object.entries(config).forEach(([key, value]) => {
+                if (key !== 'type') {
+                    const optionInput = optionsContainer.find(`[data-option="${key}"]`);
+                    if (optionInput.length) {
+                        if (typeof value === 'object') {
+                            optionInput.val(JSON.stringify(value));
+                        } else {
+                            optionInput.val(value);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    showNotification(`已应用${templateData.name}模板`, 'success');
+}
+
+// 生成数据
+function generateData() {
+    const config = collectGeneratorConfig();
+    if (!config.fields.length) {
+        showNotification('请至少选择一个字段', 'warning');
+        return;
+    }
+
+    showLoading('正在生成数据...');
+
+    // 生成数据
+    const generatedData = [];
+    for (let i = 0; i < config.recordCount; i++) {
+        const record = {};
+        config.fields.forEach(field => {
+            record[field.name] = generateFieldValue(field);
+        });
+        generatedData.push(record);
+    }
+
+    // 插入数据
+    insertGeneratedData(config.table, generatedData);
+}
+
+// 收集生成器配置
+function collectGeneratorConfig() {
+    const table = $('#tableSelector').val();
+    const recordCount = parseInt($('#generatorCount').val()) || 10;
+    const fields = [];
+
+    $('.field-checkbox:checked').each(function() {
+        const fieldName = $(this).data('field');
+        const type = $(`.field-type-select[data-field="${fieldName}"]`).val();
+        const options = {};
+
+        $(`.field-options[data-field="${fieldName}"] input`).each(function() {
+            const optionName = $(this).data('option');
+            if (optionName) {
+                options[optionName] = $(this).val();
+            }
+        });
+
+        fields.push({
+            name: fieldName,
+            type: type,
+            options: options
+        });
+    });
+
+    return {
+        table: table,
+        recordCount: recordCount,
+        fields: fields
+    };
+}
+
+// 生成字段值
+function generateFieldValue(fieldConfig) {
+    const { type, options } = fieldConfig;
+
+    switch(type) {
+        case 'number':
+            return generateNumber(options);
+        case 'string':
+        case 'text':
+            return generateString(options);
+        case 'email':
+            return generateEmail();
+        case 'phone':
+            return generatePhone();
+        case 'name':
+            return generateName();
+        case 'address':
+            return generateAddress();
+        case 'date':
+            return generateDate(options);
+        case 'datetime':
+            return generateDateTime(options);
+        case 'boolean':
+            return generateBoolean();
+        case 'credit_card':
+            return generateCreditCard();
+        case 'domain':
+            return generateDomain();
+        case 'ip_address':
+            return generateIPAddress();
+        case 'regex':
+            return generateRegex(options);
+        case 'enum':
+            return generateEnum(options);
+        default:
+            return generateString(options);
+    }
+}
+
+// 数字生成器
+function generateNumber(options = {}) {
+    const min = parseFloat(options.min) || 1;
+    const max = parseFloat(options.max) || 100;
+    const decimals = parseInt(options.decimals) || 0;
+
+    const value = Math.random() * (max - min) + min;
+    return decimals > 0 ? parseFloat(value.toFixed(decimals)) : Math.floor(value);
+}
+
+// 字符串生成器
+function generateString(options = {}) {
+    const minLength = parseInt(options.min) || 5;
+    const maxLength = parseInt(options.max) || 20;
+    const length = Math.floor(Math.random() * (maxLength - minLength + 1)) + minLength;
+
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
+
+// 邮箱生成器
+function generateEmail() {
+    const usernames = ['zhang', 'wang', 'li', 'liu', 'chen', 'yang', 'zhao', 'huang', 'zhou', 'wu'];
+    const domains = ['gmail.com', '163.com', 'qq.com', 'hotmail.com', 'sina.com', 'outlook.com'];
+
+    const username = usernames[Math.floor(Math.random() * usernames.length)] +
+                    Math.floor(Math.random() * 999);
+    const domain = domains[Math.floor(Math.random() * domains.length)];
+
+    return `${username}@${domain}`;
+}
+
+// 电话生成器
+function generatePhone() {
+    const prefixes = ['138', '139', '137', '136', '135', '134', '159', '158', '157', '150'];
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const suffix = Math.floor(Math.random() * 100000000).toString().padStart(8, '0');
+    return prefix + suffix;
+}
+
+// 姓名生成器
+function generateName() {
+    const surnames = ['张', '王', '李', '刘', '陈', '杨', '赵', '黄', '周', '吴', '徐', '孙', '马', '朱', '胡', '林', '郭', '何', '高', '罗'];
+    const givenNames = ['伟', '芳', '娜', '秀英', '敏', '静', '丽', '强', '磊', '洋', '艳', '勇', '杰', '娟', '涛', '明', '超', '秀兰', '霞', '平', '刚', '桂英'];
+
+    const surname = surnames[Math.floor(Math.random() * surnames.length)];
+    const givenName = givenNames[Math.floor(Math.random() * givenNames.length)];
+
+    return surname + givenName;
+}
+
+// 地址生成器
+function generateAddress() {
+    const cities = ['北京', '上海', '广州', '深圳', '杭州', '南京', '成都', '武汉', '西安', '重庆'];
+    const districts = ['朝阳区', '海淀区', '西城区', '东城区', '浦东新区', '黄浦区', '天河区', '越秀区', '南山区', '福田区'];
+    const streets = ['建国路', '人民路', '解放路', '中山路', '友谊路', '和平路', '建设路', '新华路', '文化路', '商业街'];
+
+    const city = cities[Math.floor(Math.random() * cities.length)];
+    const district = districts[Math.floor(Math.random() * districts.length)];
+    const street = streets[Math.floor(Math.random() * streets.length)];
+    const number = Math.floor(Math.random() * 999) + 1;
+
+    return `${city}市${district}${street}${number}号`;
+}
+
+// 日期生成器
+function generateDate(options = {}) {
+    const start = new Date(options.start || '2020-01-01');
+    const end = new Date(options.end || '2024-12-31');
+
+    const date = new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+    return date.toISOString().split('T')[0];
+}
+
+// 日期时间生成器
+function generateDateTime(options = {}) {
+    const range = options.range || 'past_year';
+    let start, end;
+
+    switch(range) {
+        case 'past_week':
+            start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            end = new Date();
+            break;
+        case 'past_month':
+            start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            end = new Date();
+            break;
+        case 'past_year':
+            start = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+            end = new Date();
+            break;
+        case 'future_week':
+            start = new Date();
+            end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+            break;
+        default:
+            start = new Date(options.start || '2020-01-01');
+            end = new Date(options.end || '2024-12-31');
+    }
+
+    const date = new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+    return date.toISOString().replace('T', ' ').substring(0, 19);
+}
+
+// 布尔值生成器
+function generateBoolean() {
+    return Math.random() > 0.5 ? 1 : 0;
+}
+
+// 信用卡生成器
+function generateCreditCard() {
+    const prefixes = ['4', '5', '37', '6']; // Visa, Mastercard, Amex, Discover
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+
+    let cardNumber = prefix;
+    const length = prefix === '37' ? 15 : 16;
+
+    while (cardNumber.length < length - 1) {
+        cardNumber += Math.floor(Math.random() * 10);
+    }
+
+    // Luhn算法校验
+    let sum = 0;
+    let isEven = true;
+
+    for (let i = cardNumber.length - 1; i >= 0; i--) {
+        let digit = parseInt(cardNumber[i]);
+
+        if (isEven) {
+            digit *= 2;
+            if (digit > 9) {
+                digit -= 9;
+            }
+        }
+
+        sum += digit;
+        isEven = !isEven;
+    }
+
+    const checkDigit = (10 - (sum % 10)) % 10;
+    cardNumber += checkDigit;
+
+    // 格式化
+    let formatted = '';
+    for (let i = 0; i < cardNumber.length; i++) {
+        if (i > 0 && i % 4 === 0) {
+            formatted += ' ';
+        }
+        formatted += cardNumber[i];
+    }
+
+    return formatted;
+}
+
+// 域名生成器
+function generateDomain() {
+    const names = ['example', 'test', 'demo', 'sample', 'myapp', 'webapp', 'api', 'service', 'data', 'cloud'];
+    const tlds = ['com', 'org', 'net', 'io', 'co', 'tech', 'dev', 'app'];
+
+    const name = names[Math.floor(Math.random() * names.length)];
+    const tld = tlds[Math.floor(Math.random() * tlds.length)];
+
+    return `${name}.${tld}`;
+}
+
+// IP地址生成器
+function generateIPAddress() {
+    const version = Math.random() > 0.5 ? 4 : 6;
+
+    if (version === 4) {
+        return `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
+    } else {
+        let ipv6 = '';
+        for (let i = 0; i < 8; i++) {
+            ipv6 += Math.floor(Math.random() * 65536).toString(16).padStart(4, '0');
+            if (i < 7) ipv6 += ':';
+        }
+        return ipv6;
+    }
+}
+
+// 正则表达式生成器
+function generateRegex(options = {}) {
+    const pattern = options.pattern || '[A-Za-z0-9]+';
+    const flags = options.flags || '';
+
+    try {
+        const regex = new RegExp(pattern, flags);
+        const testString = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        const matches = testString.match(regex);
+
+        if (matches && matches.length > 0) {
+            return matches[Math.floor(Math.random() * matches.length)];
+        }
+
+        // 如果没有匹配，生成一个随机字符串
+        return generateString({ min: 5, max: 15 });
+    } catch (e) {
+        return generateString({ min: 5, max: 15 });
+    }
+}
+
+// 枚举生成器
+function generateEnum(options = {}) {
+    const values = options.values ? options.values.split(',') : ['选项1', '选项2', '选项3'];
+    const cleanValues = values.map(v => v.trim()).filter(v => v);
+
+    if (cleanValues.length === 0) {
+        return '选项1';
+    }
+
+    return cleanValues[Math.floor(Math.random() * cleanValues.length)];
+}
+
+// 插入生成的数据
+function insertGeneratedData(table, data) {
+    if (data.length === 0) {
+        showNotification('没有数据需要插入', 'warning');
+        return;
+    }
+
+    const connectionId = currentConnectionId;
+    const database = $('#currentDatabase').val();
+
+    if (!connectionId || !database) {
+        showNotification('请先选择数据库连接', 'warning');
+        return;
+    }
+
+    const columns = Object.keys(data[0]);
+    const values = data.map(row => columns.map(col => row[col]));
+
+    // 构建插入语句
+    const insertSQL = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
+
+    // 批量插入
+    const batchSize = 100;
+    let insertedCount = 0;
+    let currentBatch = 0;
+
+    function insertBatch() {
+        const start = currentBatch * batchSize;
+        const end = Math.min(start + batchSize, values.length);
+        const batchValues = values.slice(start, end);
+
+        if (batchValues.length === 0) {
+            hideLoading();
+            showNotification(`成功插入 ${insertedCount} 条数据`, 'success');
+            refreshTable();
+            return;
+        }
+
+        showLoading(`正在插入数据 ${start + 1}-${end}/${values.length}...`);
+
+        // 展开批量数据
+        const flatValues = batchValues.flat();
+
+        fetch(`/api/execute/${connectionId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                sql: insertSQL,
+                params: flatValues,
+                database: database
+            })
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                insertedCount += batchValues.length;
+                currentBatch++;
+                insertBatch();
+            } else {
+                hideLoading();
+                displayQueryError(result);
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            showNotification('插入失败: ' + error.message, 'error');
+        });
+    }
+
+    insertBatch();
+}
+
+// 预览数据
+function previewData() {
+    const config = collectGeneratorConfig();
+    if (!config.fields.length) {
+        showNotification('请至少选择一个字段', 'warning');
+        return;
+    }
+
+    const previewData = [];
+    const previewCount = Math.min(5, config.recordCount);
+
+    for (let i = 0; i < previewCount; i++) {
+        const record = {};
+        config.fields.forEach(field => {
+            record[field.name] = generateFieldValue(field);
+        });
+        previewData.push(record);
+    }
+
+    // 显示预览
+    const previewContainer = $('#generatorPreview');
+    const previewContent = previewContainer.find('pre');
+
+    let previewText = `预览 ${previewCount} 条数据 (共 ${config.recordCount} 条):\n\n`;
+    previewData.forEach((record, index) => {
+        previewText += `记录 ${index + 1}:\n`;
+        Object.entries(record).forEach(([key, value]) => {
+            previewText += `  ${key}: ${value}\n`;
+        });
+        previewText += '\n';
+    });
+
+    previewContent.text(previewText);
+    previewContainer.show();
+}
+
+// 刷新表格数据
+function refreshTable() {
+    if (window.refreshTableData) {
+        window.refreshTableData();
+    } else {
+        // 重新加载当前表数据
+        const table = $('#tableSelector').val();
+        if (table) {
+            loadTableData(table);
+        }
+    }
+}
+
+// ========== 文件结束 ==========

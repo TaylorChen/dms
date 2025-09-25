@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Cells 数据更新测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .result { margin: 10px 0; padding: 10px; border-radius: 3px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        button { padding: 8px 16px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Grid Cells 数据更新测试</h1>
+
+        <div class="test-section">
+            <h3>当前数据状态</h3>
+            <div id="currentData">加载中...</div>
+            <button onclick="loadCurrentData()">刷新数据</button>
+        </div>
+
+        <div class="test-section">
+            <h3>测试数据更新</h3>
+            <div>
+                <label>行ID: <input type="number" id="testRowId" value="1"></label>
+                <label>列ID: <input type="number" id="testColId" value="1"></label>
+                <label>新值: <input type="text" id="testValue" value="前端测试数据"></label>
+                <button onclick="testUpdate()">测试更新</button>
+            </div>
+            <div id="updateResult"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>模拟前端编辑</h3>
+            <div>
+                <label>选择行: <select id="rowSelect"></select></label>
+                <label>选择列: <select id="colSelect">
+                    <option value="value">value</option>
+                    <option value="data_type">data_type</option>
+                    <option value="updated_by">updated_by</option>
+                </select></label>
+                <label>新值: <input type="text" id="newValue"></label>
+                <button onclick="simulateFrontendEdit()">模拟编辑</button>
+            </div>
+            <div id="simulateResult"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentData = [];
+
+        // 加载当前数据
+        async function loadCurrentData() {
+            try {
+                const response = await fetch('/api/data/mysql_local_mysql/test/grid_cells');
+                const result = await response.json();
+
+                if (result.success) {
+                    currentData = result.data.rows;
+                    displayData(currentData);
+                } else {
+                    document.getElementById('currentData').innerHTML =
+                        `<div class="result error">加载数据失败: ${result.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('currentData').innerHTML =
+                    `<div class="result error">请求失败: ${error.message}</div>`;
+            }
+        }
+
+        // 显示数据表格
+        function displayData(data) {
+            if (data.length === 0) {
+                document.getElementById('currentData').innerHTML = '<div>暂无数据</div>';
+                return;
+            }
+
+            const columns = Object.keys(data[0]);
+            let html = '<table><thead><tr>';
+            columns.forEach(col => {
+                html += `<th>${col}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+
+            data.forEach(row => {
+                html += '<tr>';
+                columns.forEach(col => {
+                    html += `<td>${row[col] || ''}</td>`;
+                });
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('currentData').innerHTML = html;
+
+            // 更新行选择器
+            updateRowSelector(data);
+        }
+
+        // 更新行选择器
+        function updateRowSelector(data) {
+            const select = document.getElementById('rowSelect');
+            select.innerHTML = '';
+            data.forEach((row, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = `行 ${row.row_id}, 列 ${row.col_id}: ${row.value}`;
+                select.appendChild(option);
+            });
+        }
+
+        // 测试数据更新
+        async function testUpdate() {
+            const rowId = document.getElementById('testRowId').value;
+            const colId = document.getElementById('testColId').value;
+            const value = document.getElementById('testValue').value;
+
+            const updateSQL = 'UPDATE grid_cells SET value = ? WHERE row_id = ? AND col_id = ?';
+            const params = [value, parseInt(rowId), parseInt(colId)];
+
+            try {
+                const response = await fetch('/api/query/mysql_local_mysql', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sql: updateSQL,
+                        params: params,
+                        database: 'test'
+                    })
+                });
+
+                const result = await response.json();
+                const resultDiv = document.getElementById('updateResult');
+
+                if (result.success) {
+                    resultDiv.innerHTML = `<div class="result success">更新成功！</div>`;
+                    loadCurrentData(); // 刷新数据
+                } else {
+                    resultDiv.innerHTML = `<div class="result error">更新失败: ${result.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('updateResult').innerHTML =
+                    `<div class="result error">请求失败: ${error.message}</div>`;
+            }
+        }
+
+        // 模拟前端编辑
+        function simulateFrontendEdit() {
+            const rowIndex = document.getElementById('rowSelect').value;
+            const colName = document.getElementById('colSelect').value;
+            const newValue = document.getElementById('newValue').value;
+
+            if (!currentData[rowIndex]) {
+                document.getElementById('simulateResult').innerHTML =
+                    '<div class="result error">请选择有效的行</div>';
+                return;
+            }
+
+            const rowData = currentData[rowIndex];
+
+            // 模拟 getPrimaryKeyForRow 函数的逻辑
+            const primaryKey = {
+                column: 'row_id',
+                value: rowData.row_id,
+                secondColumn: 'col_id',
+                secondValue: rowData.col_id,
+                isComposite: true
+            };
+
+            // 构建UPDATE语句
+            const updateSQL = `UPDATE grid_cells SET \`${colName}\` = ? WHERE \`${primaryKey.column}\` = ? AND \`${primaryKey.secondColumn}\` = ?`;
+            const params = [newValue, primaryKey.value, primaryKey.secondValue];
+
+            document.getElementById('simulateResult').innerHTML =
+                `<div class="result">将要执行的SQL:<br>${updateSQL}<br>参数: ${JSON.stringify(params)}</div>`;
+        }
+
+        // 页面加载时加载数据
+        window.onload = function() {
+            loadCurrentData();
+        };
+    </script>
+</body>
+</html>

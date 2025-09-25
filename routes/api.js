@@ -1443,6 +1443,59 @@ router.delete('/datasources/:name', async (req, res) => {
     }
 });
 
+// 通过ID删除数据源
+router.delete('/datasources/id/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log('🔍 [DEBUG] 收到删除请求，ID:', id);
+
+        // 获取所有数据源，包括原始key
+        const dataSources = dataSourceManager.getDataSources();
+        console.log('📋 [DEBUG] 所有数据源:', dataSources.map(ds => ({
+            name: ds.name,
+            id: ds.id,
+            connectionId: ds.connectionId
+        })));
+
+        let dataSource = null;
+        let dataSourceKey = null;
+
+        // 在数据源数组中查找匹配的连接
+        for (const ds of dataSources) {
+            if (ds.connectionId === id || ds.id === id) {
+                dataSource = ds;
+                console.log('✅ [DEBUG] 找到匹配的数据源:', ds);
+
+                // 查找对应的key（数据源名称）
+                const sourcesMap = dataSourceManager.dataSources;
+                console.log('🗺️ [DEBUG] 数据源Map条目数:', sourcesMap.size);
+
+                for (const [key, value] of sourcesMap.entries()) {
+                    console.log('🔑 [DEBUG] 检查key:', key, 'value.connectionId:', value.connectionId);
+                    if (value === ds || value.connectionId === ds.connectionId) {
+                        dataSourceKey = key;
+                        console.log('🎯 [DEBUG] 找到对应的key:', dataSourceKey);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        if (!dataSource || !dataSourceKey) {
+            console.log('❌ [DEBUG] 未找到匹配的数据源');
+            return res.status(404).json({ success: false, error: '数据源不存在' });
+        }
+
+        console.log('🗑️ [DEBUG] 准备删除数据源:', { dataSourceKey, dataSource });
+        const result = await dataSourceManager.deleteDataSource(dataSourceKey);
+        res.json(result);
+    } catch (error) {
+        console.error('❌ [DEBUG] 删除数据源时出错:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // 连接数据源
 router.post('/datasources/:name/connect', async (req, res) => {
     try {

@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据生成器功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.secondary {
+            background-color: #6c757d;
+        }
+        button.secondary:hover {
+            background-color: #545b62;
+        }
+        input, select {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .config-row {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            gap: 10px;
+        }
+        .config-row label {
+            min-width: 120px;
+            font-weight: bold;
+        }
+        .config-row input, .config-row select {
+            flex: 1;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 10px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>数据生成器功能测试</h1>
+
+        <div class="test-section">
+            <h3>基本数据类型测试</h3>
+            <div class="config-row">
+                <label>生成数量:</label>
+                <input type="number" id="basicCount" value="10" min="1" max="100">
+                <button onclick="testBasicTypes()">测试基本类型</button>
+            </div>
+            <div id="basicResults"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>中文数据测试</h3>
+            <div class="config-row">
+                <label>生成数量:</label>
+                <input type="number" id="chineseCount" value="5" min="1" max="100">
+                <button onclick="testChineseData()">测试中文数据</button>
+            </div>
+            <div id="chineseResults"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>信用卡生成测试</h3>
+            <div class="config-row">
+                <label>生成数量:</label>
+                <input type="number" id="creditCount" value="5" min="1" max="20">
+                <button onclick="testCreditCards()">测试信用卡</button>
+            </div>
+            <div id="creditResults"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>地址数据测试</h3>
+            <div class="config-row">
+                <label>生成数量:</label>
+                <input type="number" id="addressCount" value="5" min="1" max="50">
+                <button onclick="testAddresses()">测试地址</button>
+            </div>
+            <div id="addressResults"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>正则表达式测试</h3>
+            <div class="config-row">
+                <label>正则表达式:</label>
+                <input type="text" id="regexPattern" value="[A-Z]{2}\d{4}" placeholder="例如: [A-Z]{2}\d{4}">
+                <label>生成数量:</label>
+                <input type="number" id="regexCount" value="10" min="1" max="50">
+                <button onclick="testRegex()">测试正则</button>
+            </div>
+            <div id="regexResults"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>批量生成测试</h3>
+            <div class="config-row">
+                <label>用户数量:</label>
+                <input type="number" id="batchUserCount" value="100" min="1" max="1000">
+                <button onclick="testBatchGeneration()">批量生成测试</button>
+            </div>
+            <div id="batchResults"></div>
+        </div>
+    </div>
+
+    <script>
+        // 模拟数据生成器函数
+        function generateNumber(options = {}) {
+            const min = parseFloat(options.min) || 1;
+            const max = parseFloat(options.max) || 100;
+            const decimals = parseInt(options.decimals) || 0;
+            const value = Math.random() * (max - min) + min;
+            return decimals > 0 ? parseFloat(value.toFixed(decimals)) : Math.floor(value);
+        }
+
+        function generateString(options = {}) {
+            const minLength = parseInt(options.min) || 5;
+            const maxLength = parseInt(options.max) || 20;
+            const length = Math.floor(Math.random() * (maxLength - minLength + 1)) + minLength;
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            for (let i = 0; i < length; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        }
+
+        function generateEmail() {
+            const usernames = ['zhang', 'wang', 'li', 'liu', 'chen', 'yang', 'zhao', 'huang', 'zhou', 'wu'];
+            const domains = ['gmail.com', '163.com', 'qq.com', 'hotmail.com', 'sina.com', 'outlook.com'];
+            const username = usernames[Math.floor(Math.random() * usernames.length)] + Math.floor(Math.random() * 999);
+            const domain = domains[Math.floor(Math.random() * domains.length)];
+            return `${username}@${domain}`;
+        }
+
+        function generatePhone() {
+            const prefixes = ['138', '139', '137', '136', '135', '134', '159', '158', '157', '150'];
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const suffix = Math.floor(Math.random() * 100000000).toString().padStart(8, '0');
+            return prefix + suffix;
+        }
+
+        function generateName() {
+            const surnames = ['张', '王', '李', '刘', '陈', '杨', '赵', '黄', '周', '吴', '徐', '孙', '马', '朱', '胡', '林', '郭', '何', '高', '罗'];
+            const givenNames = ['伟', '芳', '娜', '秀英', '敏', '静', '丽', '强', '磊', '洋', '艳', '勇', '杰', '娟', '涛', '明', '超', '秀兰', '霞', '平', '刚', '桂英'];
+            const surname = surnames[Math.floor(Math.random() * surnames.length)];
+            const givenName = givenNames[Math.floor(Math.random() * givenNames.length)];
+            return surname + givenName;
+        }
+
+        function generateAddress() {
+            const cities = ['北京', '上海', '广州', '深圳', '杭州', '南京', '成都', '武汉', '西安', '重庆'];
+            const districts = ['朝阳区', '海淀区', '西城区', '东城区', '浦东新区', '黄浦区', '天河区', '越秀区', '南山区', '福田区'];
+            const streets = ['建国路', '人民路', '解放路', '中山路', '友谊路', '和平路', '建设路', '新华路', '文化路', '商业街'];
+            const city = cities[Math.floor(Math.random() * cities.length)];
+            const district = districts[Math.floor(Math.random() * districts.length)];
+            const street = streets[Math.floor(Math.random() * streets.length)];
+            const number = Math.floor(Math.random() * 999) + 1;
+            return `${city}市${district}${street}${number}号`;
+        }
+
+        function generateCreditCard() {
+            const prefixes = ['4', '5', '37', '6'];
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            let cardNumber = prefix;
+            const length = prefix === '37' ? 15 : 16;
+            while (cardNumber.length < length - 1) {
+                cardNumber += Math.floor(Math.random() * 10);
+            }
+            // Luhn算法校验
+            let sum = 0;
+            let isEven = true;
+            for (let i = cardNumber.length - 1; i >= 0; i--) {
+                let digit = parseInt(cardNumber[i]);
+                if (isEven) {
+                    digit *= 2;
+                    if (digit > 9) digit -= 9;
+                }
+                sum += digit;
+                isEven = !isEven;
+            }
+            const checkDigit = (10 - (sum % 10)) % 10;
+            cardNumber += checkDigit;
+            let formatted = '';
+            for (let i = 0; i < cardNumber.length; i++) {
+                if (i > 0 && i % 4 === 0) formatted += ' ';
+                formatted += cardNumber[i];
+            }
+            return formatted;
+        }
+
+        function generateIPAddress() {
+            const version = Math.random() > 0.5 ? 4 : 6;
+            if (version === 4) {
+                return `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
+            } else {
+                let ipv6 = '';
+                for (let i = 0; i < 8; i++) {
+                    ipv6 += Math.floor(Math.random() * 65536).toString(16).padStart(4, '0');
+                    if (i < 7) ipv6 += ':';
+                }
+                return ipv6;
+            }
+        }
+
+        function generateDomain() {
+            const names = ['example', 'test', 'demo', 'sample', 'myapp', 'webapp', 'api', 'service', 'data', 'cloud'];
+            const tlds = ['com', 'org', 'net', 'io', 'co', 'tech', 'dev', 'app'];
+            const name = names[Math.floor(Math.random() * names.length)];
+            const tld = tlds[Math.floor(Math.random() * tlds.length)];
+            return `${name}.${tld}`;
+        }
+
+        function generateRegex(options = {}) {
+            const pattern = options.pattern || '[A-Za-z0-9]+';
+            try {
+                const regex = new RegExp(pattern);
+                const testString = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+                const matches = testString.match(regex);
+                if (matches && matches.length > 0) {
+                    return matches[Math.floor(Math.random() * matches.length)];
+                }
+                return generateString({ min: 5, max: 15 });
+            } catch (e) {
+                return 'Invalid Pattern';
+            }
+        }
+
+        function generateDateTime(options = {}) {
+            const range = options.range || 'past_year';
+            let start, end;
+            switch(range) {
+                case 'past_week':
+                    start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+                    end = new Date();
+                    break;
+                case 'past_month':
+                    start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                    end = new Date();
+                    break;
+                case 'past_year':
+                    start = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+                    end = new Date();
+                    break;
+                default:
+                    start = new Date('2020-01-01');
+                    end = new Date('2024-12-31');
+            }
+            const date = new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+            return date.toISOString().replace('T', ' ').substring(0, 19);
+        }
+
+        function generateBoolean() {
+            return Math.random() > 0.5 ? 1 : 0;
+        }
+
+        function displayResults(containerId, data, type = 'info') {
+            const container = document.getElementById(containerId);
+            container.innerHTML = `<div class="result ${type}">${JSON.stringify(data, null, 2)}</div>`;
+        }
+
+        function testBasicTypes() {
+            const count = parseInt(document.getElementById('basicCount').value);
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    number: generateNumber({ min: 1, max: 1000 }),
+                    float: generateNumber({ min: 0, max: 100, decimals: 2 }),
+                    string: generateString({ min: 5, max: 20 }),
+                    email: generateEmail(),
+                    phone: generatePhone(),
+                    ip: generateIPAddress(),
+                    domain: generateDomain(),
+                    datetime: generateDateTime({ range: 'past_week' }),
+                    boolean: generateBoolean()
+                });
+            }
+
+            displayResults('basicResults', results, 'success');
+        }
+
+        function testChineseData() {
+            const count = parseInt(document.getElementById('chineseCount').value);
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    name: generateName(),
+                    address: generateAddress()
+                });
+            }
+
+            displayResults('chineseResults', results, 'success');
+        }
+
+        function testCreditCards() {
+            const count = parseInt(document.getElementById('creditCount').value);
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    card_number: generateCreditCard(),
+                    type: ['Visa', 'Mastercard', 'American Express', 'Discover'][Math.floor(Math.random() * 4)]
+                });
+            }
+
+            displayResults('creditResults', results, 'info');
+        }
+
+        function testAddresses() {
+            const count = parseInt(document.getElementById('addressCount').value);
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    full_address: generateAddress(),
+                    generated_at: new Date().toISOString()
+                });
+            }
+
+            displayResults('addressResults', results, 'success');
+        }
+
+        function testRegex() {
+            const pattern = document.getElementById('regexPattern').value;
+            const count = parseInt(document.getElementById('regexCount').value);
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    pattern: pattern,
+                    result: generateRegex({ pattern: pattern })
+                });
+            }
+
+            displayResults('regexResults', results, 'info');
+        }
+
+        function testBatchGeneration() {
+            const count = parseInt(document.getElementById('batchUserCount').value);
+            const startTime = performance.now();
+            const results = [];
+
+            for (let i = 0; i < count; i++) {
+                results.push({
+                    id: i + 1,
+                    username: generateString({ min: 6, max: 12 }),
+                    name: generateName(),
+                    email: generateEmail(),
+                    phone: generatePhone(),
+                    age: generateNumber({ min: 18, max: 80 }),
+                    address: generateAddress(),
+                    registered_at: generateDateTime({ range: 'past_year' }),
+                    is_active: generateBoolean(),
+                    credit_score: generateNumber({ min: 300, max: 850 })
+                });
+            }
+
+            const endTime = performance.now();
+            const duration = (endTime - startTime).toFixed(2);
+
+            const summary = {
+                total_records: count,
+                generation_time_ms: duration,
+                records_per_second: (count / duration * 1000).toFixed(2),
+                sample_data: results.slice(0, 3)
+            };
+
+            displayResults('batchResults', summary, 'success');
+        }
+
+        // 页面加载时自动运行基本测试
+        window.onload = function() {
+            console.log('数据生成器测试页面已加载');
+            testBasicTypes();
+        };
+    </script>
+</body>
+</html>

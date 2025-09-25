@@ -53,7 +53,7 @@
                             <button class="btn-close d-lg-none" onclick="toggleSidebar()"></button>
                         </div>
                         <div class="btn-group btn-group-sm flex-wrap">
-                            <button class="btn btn-success" onclick="showNewConnectionModal()">
+                            <button class="btn btn-success" onclick="if(typeof showNewConnectionModal === 'function') showNewConnectionModal(); else alert('请等待页面完全加载后再试');">
                                 <i class="fas fa-plus"></i> 新建连接
                             </button>
                             <button class="btn btn-outline-primary" onclick="if(typeof showNewGroupModal === 'function') showNewGroupModal()">
@@ -68,10 +68,10 @@
                             <button class="btn btn-outline-warning" onclick="if(typeof addTestConnections === 'function') addTestConnections()" title="添加测试连接">
                                 <i class="fas fa-bug"></i>
                             </button>
-                            <button class="btn btn-outline-danger" onclick="if(typeof testLibraries === 'function') testLibraries()" title="测试库">
+                            <button class="btn btn-outline-danger" onclick="if(typeof testLibraries === 'function') testLibraries(); else alert('请等待页面完全加载后再试');" title="测试库">
                                 <i class="fas fa-flask"></i>
                             </button>
-                            <button class="btn btn-outline-info" onclick="simpleModalTest()" title="简单测试">
+                            <button class="btn btn-outline-info" onclick="if(typeof simpleModalTest === 'function') simpleModalTest(); else alert('请等待页面完全加载后再试');" title="简单测试">
                                 <i class="fas fa-play"></i>
                             </button>
                             </div>
@@ -272,18 +272,54 @@
                             </div>
                             <div class="card-body">
                                 <div class="row mb-3">
-                                    <div class="col-md-4">
+                                    <div class="col-md-3">
                                         <select class="form-select" id="tableSelector">
                                             <option value="">选择表</option>
                                         </select>
                                     </div>
-                                    <div class="col-md-4">
-                                        <input type="text" class="form-control" id="searchInput" placeholder="搜索...">
+                                    <div class="col-md-3">
+                                        <input type="text" class="form-control" id="searchInput" placeholder="快速搜索...">
                                     </div>
-                                    <div class="col-md-4">
-                                        <button class="btn btn-primary" onclick="loadTableData()">
-                                            <i class="fas fa-refresh"></i> 刷新数据
+                                    <div class="col-md-3">
+                                        <button class="btn btn-outline-primary" onclick="toggleAdvancedFilter()">
+                                            <i class="fas fa-filter"></i> 高级过滤
                                         </button>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="btn-group" role="group">
+                                            <button class="btn btn-primary" onclick="loadTableData()">
+                                                <i class="fas fa-refresh"></i> 刷新数据
+                                            </button>
+                                            <button class="btn btn-success" onclick="showDataGenerator()">
+                                                <i class="fas fa-magic"></i> 生成数据
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 高级过滤面板 -->
+                                <div id="advancedFilterPanel" class="card mb-3" style="display: none;">
+                                    <div class="card-header">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <h6 class="mb-0">高级过滤条件</h6>
+                                            <button type="button" class="btn-close" onclick="toggleAdvancedFilter()"></button>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div id="filterRulesContainer">
+                                            <!-- 过滤规则将在这里动态生成 -->
+                                        </div>
+                                        <div class="mt-3">
+                                            <button class="btn btn-sm btn-outline-primary" onclick="addFilterRule()">
+                                                <i class="fas fa-plus"></i> 添加条件
+                                            </button>
+                                            <button class="btn btn-sm btn-success" onclick="applyAdvancedFilter()">
+                                                <i class="fas fa-check"></i> 应用过滤
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary" onclick="clearAdvancedFilter()">
+                                                <i class="fas fa-times"></i> 清除过滤
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                                 <div id="dataTableContainer">
@@ -294,6 +330,76 @@
                             </div>
                         </div>
                     </div>
+
+                                <!-- 数据生成器面板 -->
+                                <div id="dataGeneratorPanel" class="card mb-3" style="display: none;">
+                                    <div class="card-header">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <h6 class="mb-0">高级数据生成器</h6>
+                                            <button type="button" class="btn-close" onclick="toggleDataGenerator()"></button>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row mb-3">
+                                            <div class="col-md-4">
+                                                <label class="form-label">生成数量</label>
+                                                <input type="number" class="form-control" id="generateRowCount" value="100" min="1" max="10000">
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label">生成模式</label>
+                                                <select class="form-select" id="generateMode">
+                                                    <option value="random">随机数据</option>
+                                                    <option value="realistic">真实模拟数据</option>
+                                                    <option value="custom">自定义规则</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label">操作</label>
+                                                <div class="btn-group w-100" role="group">
+                                                    <button class="btn btn-warning" onclick="previewGeneratedData()">
+                                                        <i class="fas fa-eye"></i> 预览
+                                                    </button>
+                                                    <button class="btn btn-success" onclick="generateTestData()">
+                                                        <i class="fas fa-play"></i> 生成
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- 字段配置区域 -->
+                                        <div id="fieldConfigsContainer" class="mb-3">
+                                            <h6>字段生成规则</h6>
+                                            <div id="fieldConfigsList">
+                                                <!-- 字段配置将在这里动态生成 -->
+                                            </div>
+                                        </div>
+
+                                        <!-- 预览区域 -->
+                                        <div id="dataPreviewContainer" style="display: none;">
+                                            <h6>数据预览</h6>
+                                            <div class="table-responsive">
+                                                <table class="table table-striped table-sm" id="dataPreviewTable">
+                                                    <thead id="previewTableHead"></thead>
+                                                    <tbody id="previewTableBody"></tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+
+                                        <!-- 预设模板 -->
+                                        <div class="row">
+                                            <div class="col-12">
+                                                <h6>快速模板</h6>
+                                                <div class="btn-group flex-wrap" role="group">
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="applyTemplate('users')">用户数据</button>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="applyTemplate('products')">商品数据</button>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="applyTemplate('orders')">订单数据</button>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="applyTemplate('logs')">日志数据</button>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="applyTemplate('addresses')">地址数据</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
 
                     <!-- 表结构标签页 -->
                     <div class="tab-pane fade" id="structure" role="tabpanel">
@@ -1500,16 +1606,65 @@
             }
         });
 
-        // 显示加载状态
+        // 显示加载状态和按钮控制
+        function showLoadingState() {
+            const buttons = document.querySelectorAll('button[onclick*="showNewConnectionModal"], button[onclick*="testLibraries"], button[onclick*="simpleModalTest"]');
+            buttons.forEach(button => {
+                button.disabled = true;
+                if (!button.innerHTML.includes('fa-spinner')) {
+                    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + button.innerHTML;
+                }
+            });
+        }
+
+        // 恢复按钮状态
+        function restoreButtonState() {
+            const buttons = document.querySelectorAll('button[onclick*="showNewConnectionModal"], button[onclick*="testLibraries"], button[onclick*="simpleModalTest"]');
+            buttons.forEach(button => {
+                button.disabled = false;
+                // 恢复原始图标和文本
+                if (button.innerHTML.includes('新建连接')) {
+                    button.innerHTML = '<i class="fas fa-plus"></i> 新建连接';
+                } else if (button.innerHTML.includes('测试库')) {
+                    button.innerHTML = '<i class="fas fa-flask"></i>';
+                } else if (button.innerHTML.includes('简单测试')) {
+                    button.innerHTML = '<i class="fas fa-play"></i>';
+                }
+            });
+        }
+
+        // 初始显示加载状态
+        showLoadingState();
+
+        // 检查关键函数
+        function checkFunctions() {
+            const functions = ['showNewConnectionModal', 'testLibraries', 'simpleModalTest'];
+            let allLoaded = true;
+
+            functions.forEach(func => {
+                console.log(`${func}:`, typeof window[func]);
+                if (typeof window[func] === 'undefined') {
+                    console.error(`Function ${func} not found!`);
+                    allLoaded = false;
+                }
+            });
+
+            if (allLoaded) {
+                restoreButtonState();
+                console.log('All functions loaded successfully');
+            } else {
+                setTimeout(checkFunctions, 100); // 100ms后再次检查
+            }
+        }
+
+        // 页面加载完成后检查函数
         window.addEventListener('load', function() {
             console.log('Page fully loaded');
-            if (typeof showNewConnectionModal === 'undefined') {
-                console.error('showNewConnectionModal still not defined after page load!');
-                alert('JavaScript文件加载失败，请刷新页面重试。');
-            } else {
-                console.log('All functions loaded successfully');
-            }
+            setTimeout(checkFunctions, 100);
         });
+
+        // 立即开始检查
+        setTimeout(checkFunctions, 100);
     </script>
 </body>
 </html>
