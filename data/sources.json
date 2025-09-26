@@ -19,17 +19,17 @@
       ],
       "status": "connected",
       "createdAt": "2025-09-19T15:00:00.000Z",
-      "updatedAt": "2025-09-25T16:36:44.615Z",
-      "lastConnected": "2025-09-25T16:36:44.615Z",
+      "updatedAt": "2025-09-26T15:32:03.511Z",
+      "lastConnected": "2025-09-26T15:32:03.511Z",
       "connectionStats": {
-        "totalConnections": 62,
+        "totalConnections": 444,
         "failedConnections": 4,
-        "avgResponseTime": 22.096774193548388
+        "avgResponseTime": 18.862612612612622
       },
       "connectionInfo": {
         "database": "test"
       },
-      "connectionId": "mysql_localhost_test_1758818204589"
+      "connectionId": "mysql_localhost_test_1758900723491"
     }
   ],
   [
@@ -52,14 +52,14 @@
       "isDefault": false,
       "status": "connected",
       "createdAt": "2025-09-20T09:00:28.315Z",
-      "updatedAt": "2025-09-25T16:37:18.519Z",
-      "lastConnected": "2025-09-25T16:37:18.519Z",
+      "updatedAt": "2025-09-26T15:32:03.518Z",
+      "lastConnected": "2025-09-26T15:32:03.518Z",
       "connectionStats": {
-        "totalConnections": 49,
+        "totalConnections": 431,
         "failedConnections": 0,
-        "avgResponseTime": 10.3265306122449
+        "avgResponseTime": 6.009280742459395
       },
-      "connectionId": "redis_localhost_0_1758818238513"
+      "connectionId": "redis_localhost_0_1758900723512"
     }
   ],
   [
@@ -79,14 +79,14 @@
       "isDefault": false,
       "status": "connected",
       "createdAt": "2025-09-20T12:57:59.174Z",
-      "updatedAt": "2025-09-25T16:36:45.177Z",
-      "lastConnected": "2025-09-25T16:36:45.177Z",
+      "updatedAt": "2025-09-26T15:32:03.523Z",
+      "lastConnected": "2025-09-26T15:32:03.523Z",
       "connectionStats": {
-        "totalConnections": 4,
+        "totalConnections": 386,
         "failedConnections": 0,
-        "avgResponseTime": 7.5
+        "avgResponseTime": 3.3186528497409324
       },
-      "connectionId": "redis_localhost_1_1758818205173"
+      "connectionId": "redis_localhost_1_1758900723519"
     }
   ]
 ]

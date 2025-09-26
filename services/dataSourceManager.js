@@ -40,6 +40,8 @@ class DataSourceManager {
     try {
       await this.ensureDataDirectory();
       await this.loadDataSources();
+      // 自动重连所有数据源
+      await this.reconnectAllDataSources();
       this.logger.info('数据源管理器初始化完成');
     } catch (error) {
       this.logger.error('数据源管理器初始化失败:', error);
@@ -401,6 +403,32 @@ class DataSourceManager {
       source.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
       source.type.toLowerCase().includes(lowerQuery)
     );
+  }
+
+  // 重连所有数据源
+  async reconnectAllDataSources() {
+    const sources = Array.from(this.dataSources.values());
+    this.logger.info(`开始重连 ${sources.length} 个数据源...`);
+
+    for (const source of sources) {
+      try {
+        // 重置连接状态
+        source.status = 'disconnected';
+        source.connectionId = null;
+
+        // 尝试重新连接
+        const result = await this.connectDataSource(source.name);
+        if (result.success) {
+          this.logger.info(`数据源 ${source.name} 重连成功`);
+        } else {
+          this.logger.warn(`数据源 ${source.name} 重连失败: ${result.error}`);
+        }
+      } catch (error) {
+        this.logger.error(`数据源 ${source.name} 重连异常:`, error);
+      }
+    }
+
+    this.logger.info('数据源重连完成');
   }
 }
 

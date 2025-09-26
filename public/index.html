@@ -137,6 +137,21 @@
                             <i class="fas fa-upload"></i> 导入/导出
                         </button>
                     </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="backup-tab" data-bs-toggle="tab" data-bs-target="#backup" type="button" role="tab">
+                            <i class="fas fa-database"></i> 备份恢复
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="users-tab" data-bs-toggle="tab" data-bs-target="#users" type="button" role="tab">
+                            <i class="fas fa-users"></i> 用户权限
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="audit-tab" data-bs-toggle="tab" data-bs-target="#audit" type="button" role="tab">
+                            <i class="fas fa-history"></i> 审计日志
+                        </button>
+                    </li>
                 </ul>
 
                 <!-- 标签页内容 -->
@@ -167,6 +182,9 @@
                                         </ul>
                                     </div>
                                     <div class="btn-group">
+                                        <button class="btn btn-outline-secondary" onclick="showQueryHistory()" title="查询历史">
+                                            <i class="fas fa-history"></i> 历史
+                                        </button>
                                         <button class="btn btn-outline-warning dropdown-toggle" data-bs-toggle="dropdown">
                                             <i class="fas fa-save"></i> 脚本
                                         </button>
@@ -493,6 +511,363 @@
                                         <button class="btn btn-success" onclick="exportData()">
                                             <i class="fas fa-download"></i> 导出数据
                                         </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 备份恢复管理标签页 -->
+                    <div class="tab-pane fade" id="backup" role="tabpanel">
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header bg-primary text-white">
+                                        <h5 class="card-title">
+                                            <i class="fas fa-database"></i> 数据库备份
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">备份类型</label>
+                                            <select class="form-select" id="backupType" onchange="updateBackupOptions()">
+                                                <option value="full">完整备份</option>
+                                                <option value="structure">仅结构</option>
+                                                <option value="data">仅数据</option>
+                                                <option value="custom">自定义</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">选择数据库/表</label>
+                                            <select class="form-select" id="backupTarget" multiple>
+                                                <option value="">全部数据库</option>
+                                            </select>
+                                        </div>
+                                        <div id="customBackupOptions" style="display: none;">
+                                            <div class="mb-3">
+                                                <label class="form-label">备份选项</label>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" id="backupIncludeData">
+                                                    <label class="form-check-label" for="backupIncludeData">
+                                                        包含数据
+                                                    </label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" id="backupIncludeStructure">
+                                                    <label class="form-check-label" for="backupIncludeStructure">
+                                                        包含结构
+                                                    </label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" id="backupIncludeTriggers">
+                                                    <label class="form-check-label" for="backupIncludeTriggers">
+                                                        包含触发器
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">备份格式</label>
+                                            <select class="form-select" id="backupFormat">
+                                                <option value="sql">SQL</option>
+                                                <option value="dump">DUMP</option>
+                                                <option value="compressed">压缩包</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">备份文件名</label>
+                                            <input type="text" class="form-control" id="backupFileName" placeholder="backup_2025-09-26">
+                                        </div>
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-primary" onclick="createBackup()">
+                                                <i class="fas fa-download"></i> 创建备份
+                                            </button>
+                                            <button class="btn btn-outline-info" onclick="scheduleBackup()">
+                                                <i class="fas fa-clock"></i> 定时备份
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header bg-success text-white">
+                                        <h5 class="card-title">
+                                            <i class="fas fa-database"></i> 数据库恢复
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">备份文件</label>
+                                            <input type="file" class="form-control" id="restoreFile" accept=".sql,.dump,.zip,.gz">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">恢复模式</label>
+                                            <select class="form-select" id="restoreMode">
+                                                <option value="overwrite">覆盖现有数据</option>
+                                                <option value="append">追加到现有数据</option>
+                                                <option value="new">创建新数据库</option>
+                                                <option value="preview">预览恢复内容</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">目标数据库</label>
+                                            <select class="form-select" id="restoreTarget">
+                                                <option value="">选择目标数据库</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">恢复选项</label>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="restoreIgnoreErrors">
+                                                <label class="form-check-label" for="restoreIgnoreErrors">
+                                                    忽略错误继续
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="restoreDropExisting">
+                                                <label class="form-check-label" for="restoreDropExisting">
+                                                    恢复前删除现有表
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="restoreDisableConstraints">
+                                                <label class="form-check-label" for="restoreDisableConstraints">
+                                                    禁用外键约束
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <div class="progress" style="display: none;" id="restoreProgress">
+                                                <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                                            </div>
+                                        </div>
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-success" onclick="restoreDatabase()">
+                                                <i class="fas fa-upload"></i> 开始恢复
+                                            </button>
+                                            <button class="btn btn-outline-warning" onclick="previewRestore()">
+                                                <i class="fas fa-eye"></i> 预览恢复
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 备份历史记录 -->
+                        <div class="row mt-4">
+                            <div class="col-12">
+                                <div class="card">
+                                    <div class="card-header bg-info text-white">
+                                        <h5 class="card-title">
+                                            <i class="fas fa-history"></i> 备份历史记录
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="table-responsive">
+                                            <table class="table table-striped" id="backupHistoryTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>备份时间</th>
+                                                        <th>备份类型</th>
+                                                        <th>数据源</th>
+                                                        <th>文件大小</th>
+                                                        <th>状态</th>
+                                                        <th>操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td colspan="6" class="text-center text-muted">暂无备份记录</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div class="d-flex justify-content-between mt-3">
+                                            <button class="btn btn-outline-primary" onclick="refreshBackupHistory()">
+                                                <i class="fas fa-refresh"></i> 刷新
+                                            </button>
+                                            <button class="btn btn-outline-danger" onclick="cleanupOldBackups()">
+                                                <i class="fas fa-trash"></i> 清理旧备份
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 用户权限管理标签页 -->
+                    <div class="tab-pane fade" id="users" role="tabpanel">
+                        <div class="row mt-4">
+                            <!-- 用户管理 -->
+                            <div class="col-md-8">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <h5 class="card-title mb-0">
+                                            <i class="fas fa-users"></i> 用户管理
+                                        </h5>
+                                        <button class="btn btn-primary btn-sm" onclick="showAddUserModal()">
+                                            <i class="fas fa-plus"></i> 添加用户
+                                        </button>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row mb-3">
+                                            <div class="col-md-6">
+                                                <div class="input-group">
+                                                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                                                    <input type="text" class="form-control" id="userSearch" placeholder="搜索用户..." onkeyup="filterUsers()">
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <select class="form-select" id="roleFilter" onchange="filterUsers()">
+                                                    <option value="">所有角色</option>
+                                                    <option value="admin">管理员</option>
+                                                    <option value="developer">开发者</option>
+                                                    <option value="analyst">分析师</option>
+                                                    <option value="viewer">查看者</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div class="table-responsive">
+                                            <table class="table table-striped table-hover" id="usersTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>用户名</th>
+                                                        <th>角色</th>
+                                                        <th>邮箱</th>
+                                                        <th>状态</th>
+                                                        <th>最后登录</th>
+                                                        <th>操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 角色权限 -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5 class="card-title">
+                                            <i class="fas fa-shield-alt"></i> 角色权限
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label for="roleSelect" class="form-label">选择角色</label>
+                                            <select class="form-select" id="roleSelect" onchange="loadRolePermissions()">
+                                                <option value="">选择角色</option>
+                                                <option value="admin">管理员</option>
+                                                <option value="developer">开发者</option>
+                                                <option value="analyst">分析师</option>
+                                                <option value="viewer">查看者</option>
+                                            </select>
+                                        </div>
+
+                                        <div id="permissionsMatrix" class="permissions-matrix">
+                                            <div class="text-center text-muted">
+                                                <i class="fas fa-hand-point-up fa-2x mb-2"></i>
+                                                <p>选择角色查看权限配置</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-3">
+                                            <button class="btn btn-success btn-sm w-100" onclick="saveRolePermissions()" disabled id="savePermissionsBtn">
+                                                <i class="fas fa-save"></i> 保存权限
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 数据库权限 -->
+                                <div class="card mt-3">
+                                    <div class="card-header">
+                                        <h5 class="card-title">
+                                            <i class="fas fa-database"></i> 数据库权限
+                                        </h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label for="userDatabasePermissions" class="form-label">用户</label>
+                                            <select class="form-select" id="userDatabasePermissions" onchange="loadUserDatabasePermissions()">
+                                                <option value="">选择用户</option>
+                                            </select>
+                                        </div>
+
+                                        <div id="databasePermissionsList" class="database-permissions">
+                                            <div class="text-center text-muted">
+                                                <i class="fas fa-database fa-2x mb-2"></i>
+                                                <p>选择用户配置数据库权限</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 审计日志管理标签页 -->
+                    <div class="tab-pane fade" id="audit" role="tabpanel">
+                        <div class="row mt-4">
+                            <div class="col-12">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <h5 class="card-title mb-0">
+                                            <i class="fas fa-history"></i> 审计日志
+                                        </h5>
+                                        <div>
+                                            <button class="btn btn-outline-danger btn-sm" onclick="clearAuditLogs()">
+                                                <i class="fas fa-trash"></i> 清理
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row mb-3">
+                                            <div class="col-md-3">
+                                                <input type="date" class="form-control" id="auditStartDate" onchange="loadAuditLogs()">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <input type="date" class="form-control" id="auditEndDate" onchange="loadAuditLogs()">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <select class="form-select" id="auditActionFilter" onchange="loadAuditLogs()">
+                                                    <option value="">所有操作</option>
+                                                    <option value="login">登录</option>
+                                                    <option value="query">查询</option>
+                                                    <option value="update">更新</option>
+                                                    <option value="delete">删除</option>
+                                                    <option value="create">创建</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <select class="form-select" id="auditUserFilter" onchange="loadAuditLogs()">
+                                                    <option value="">所有用户</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div class="table-responsive">
+                                            <table class="table table-striped table-hover" id="auditLogsTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>时间</th>
+                                                        <th>用户</th>
+                                                        <th>操作</th>
+                                                        <th>对象</th>
+                                                        <th>详情</th>
+                                                        <th>IP地址</th>
+                                                        <th>状态</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -942,40 +1317,120 @@
 
     <!-- SQL格式化设置模态框 -->
     <div class="modal fade" id="sqlFormatModal" tabindex="-1">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-lg">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">SQL格式化设置</h5>
+                    <h5 class="modal-title">高级SQL格式化工具</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">缩进大小</label>
-                        <select class="form-select" id="formatIndentSize">
-                            <option value="2">2 空格</option>
-                            <option value="4" selected>4 空格</option>
-                            <option value="8">8 空格</option>
-                        </select>
+                    <!-- 基础格式化选项 -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h6>基础设置</h6>
+                            <div class="mb-3">
+                                <label class="form-label">缩进大小</label>
+                                <select class="form-select" id="formatIndentSize">
+                                    <option value="2">2 空格</option>
+                                    <option value="4" selected>4 空格</option>
+                                    <option value="8">8 空格</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">关键字大小写</label>
+                                <select class="form-select" id="formatKeywordCase">
+                                    <option value="upper">大写</option>
+                                    <option value="lower">小写</option>
+                                    <option value="preserve" selected>保持原样</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">逗号位置</label>
+                                <select class="form-select" id="formatCommaStyle">
+                                    <option value="after">逗号在后</option>
+                                    <option value="before">逗号在前</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>高级设置</h6>
+                            <div class="mb-3">
+                                <label class="form-label">最大行长度</label>
+                                <select class="form-select" id="formatMaxLineLength">
+                                    <option value="80">80 字符</option>
+                                    <option value="100">100 字符</option>
+                                    <option value="120" selected>120 字符</option>
+                                    <option value="150">150 字符</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="formatRemoveComments">
+                                    <label class="form-check-label" for="formatRemoveComments">
+                                        移除注释
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="formatAlignColumns" checked>
+                                    <label class="form-check-label" for="formatAlignColumns">
+                                        对齐列名
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">关键字大小写</label>
-                        <select class="form-select" id="formatKeywordCase">
-                            <option value="upper">大写</option>
-                            <option value="lower">小写</option>
-                            <option value="preserve" selected>保持原样</option>
-                        </select>
+
+                    <!-- 快速操作按钮 -->
+                    <div class="border-top pt-3">
+                        <h6>快速操作</h6>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="formatAndValidateSQL()">
+                                <i class="fas fa-check-circle"></i> 格式化并验证
+                            </button>
+                            <button type="button" class="btn btn-outline-info btn-sm" onclick="formatSQL()">
+                                <i class="fas fa-magic"></i> 快速格式化
+                            </button>
+                            <button type="button" class="btn btn-outline-warning btn-sm" onclick="minifyCurrentSQL()">
+                                <i class="fas fa-compress"></i> 压缩SQL
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="formatCurrentSQLComments()">
+                                <i class="fas fa-comment"></i> 格式化注释
+                            </button>
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="formatCommaBefore" checked>
-                            <label class="form-check-label" for="formatCommaBefore">
-                                逗号前置
-                            </label>
+
+                    <!-- 语法检查区域 -->
+                    <div class="border-top pt-3 mt-3">
+                        <h6>语法检查</h6>
+                        <div class="mb-3">
+                            <button type="button" class="btn btn-outline-danger" onclick="validateCurrentSQL()">
+                                <i class="fas fa-exclamation-triangle"></i> 检查语法
+                            </button>
+                        </div>
+                        <div id="syntaxCheckResult" class="alert d-none" role="alert"></div>
+                    </div>
+
+                    <!-- 预览区域 -->
+                    <div class="border-top pt-3 mt-3">
+                        <h6>预览</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label class="form-label small">原始SQL</label>
+                                <textarea class="form-control font-monospace" id="formatPreviewOriginal" rows="6" readonly></textarea>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">格式化后</label>
+                                <textarea class="form-control font-monospace" id="formatPreviewFormatted" rows="6" readonly></textarea>
+                            </div>
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary" onclick="applySQLFormat()">应用格式化</button>
+                    <button type="button" class="btn btn-success" onclick="previewSQLFormat()">预览效果</button>
                 </div>
             </div>
         </div>
@@ -1440,6 +1895,61 @@
         </div>
     </div>
 
+    <!-- 查询历史模态框 -->
+    <div class="modal fade" id="queryHistoryModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">查询历史</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="queryHistorySearch" placeholder="搜索查询历史...">
+                                <button class="btn btn-outline-secondary" onclick="searchQueryHistory()">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="btn-group float-end">
+                                <button class="btn btn-outline-danger btn-sm" onclick="clearQueryHistory()">
+                                    <i class="fas fa-trash"></i> 清空历史
+                                </button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="exportQueryHistory()">
+                                    <i class="fas fa-download"></i> 导出
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover" id="queryHistoryTable">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>数据库</th>
+                                    <th>查询类型</th>
+                                    <th>SQL语句</th>
+                                    <th>执行时间</th>
+                                    <th>影响行数</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- 查询历史记录将在这里动态生成 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 数据比较结果模态框 -->
     <div class="modal fade" id="dataCompareModal" tabindex="-1">
         <div class="modal-dialog modal-xl">
@@ -1661,6 +2171,16 @@
         window.addEventListener('load', function() {
             console.log('Page fully loaded');
             setTimeout(checkFunctions, 100);
+
+            // 初始化应用
+            setTimeout(async function() {
+                console.log('Initializing application...');
+                if (typeof initializeApp === 'function') {
+                    await initializeApp();
+                } else {
+                    console.error('initializeApp function not found');
+                }
+            }, 500);
         });
 
         // 立即开始检查

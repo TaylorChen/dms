@@ -1,5 +1,3 @@
-# MCP-Anything - Multi-Database Management Tool
-
 A powerful web-based database management tool similar to DBeaver, supporting multiple database types with advanced features including intelligent code completion and real-time monitoring.
 
 ## 🚀 Features

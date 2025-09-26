@@ -32,7 +32,7 @@ function initializeSQLEditor() {
         });
 
         // 默认启用SQL模式
-        setupSQLAutocompletion();
+        setupEnhancedSQLAutocompletion();
 
         console.log('编辑器初始化完成，已启用智能代码提示');
     }
@@ -80,6 +80,9 @@ async function initializeApp() {
     // 加载同步历史记录
     loadSyncHistory();
 
+    // 初始化备份恢复功能
+    initBackupRestore();
+
     // 如果有保存的连接，自动尝试连接第一个MySQL连接（优先选择MySQL）
     if (connections.length > 0) {
         // 优先选择MySQL连接，如果没有则选择第一个可用连接
@@ -99,6 +102,26 @@ async function initializeApp() {
 // 加载连接数据
 async function loadConnections() {
     try {
+        // 优先从API获取连接列表
+        const apiResponse = await fetch('/api/connections');
+        if (apiResponse.ok) {
+            const result = await apiResponse.json();
+            if (result.success) {
+                connections = result.data.map(conn => ({
+                    id: conn.id,
+                    name: conn.type + '_' + conn.config.host,
+                    type: conn.type,
+                    config: conn.config,
+                    status: 'connected',
+                    connectionId: conn.id,
+                    lastConnected: conn.createdAt
+                }));
+                console.log('Loaded connections from API:', connections);
+                return;
+            }
+        }
+
+        // 备用方案：从静态文件加载
         const response = await fetch('/data/sources.json');
         if (response.ok) {
             const data = await response.json();
@@ -115,7 +138,7 @@ async function loadConnections() {
                 connectionId: config.connectionId,
                 lastConnected: config.lastConnected
             }));
-            console.log('Loaded connections:', connections);
+            console.log('Loaded connections from static file:', connections);
         } else {
             console.error('Failed to load connections');
         }
@@ -145,7 +168,7 @@ function initializeSQLEditor() {
         });
 
         // 默认启用SQL模式
-        setupSQLAutocompletion();
+        setupEnhancedSQLAutocompletion();
 
         console.log('编辑器初始化完成，已启用智能代码提示');
     }
@@ -1268,6 +1291,7 @@ async function executeQuery() {
 
     try {
         showLoading('正在执行查询...');
+        const startTime = performance.now();
 
         // 非Redis连接且没有指定数据库名时，自动添加USE语句
         let finalSql = sql;
@@ -1287,6 +1311,11 @@ async function executeQuery() {
         });
 
         const result = await response.json();
+        const endTime = performance.now();
+        const executionTime = Math.round(endTime - startTime);
+
+        // 添加到查询历史
+        addQueryHistory(sql, connectionId, currentDatabase, executionTime, (result.meta && result.meta.affectedRows) || 0);
 
         if (result.success) {
             // 根据连接类型选择显示方式
@@ -2392,93 +2421,6 @@ async function createTable() {
         }
     } catch (error) {
         showErrorMessage('创建表失败：' + error.message);
-    } finally {
-        hideLoading();
-    }
-}
-
-// 导入数据
-async function importData() {
-    const file = document.getElementById('importFile').files[0];
-    const targetTable = $('#importTargetTable').val();
-    const format = $('#importFormat').val();
-
-    if (!file || !targetTable) {
-        showErrorMessage('请选择文件和目标表');
-        return;
-    }
-
-    try {
-        showLoading('正在导入数据...');
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('targetTable', targetTable);
-        formData.append('format', format);
-
-        const response = await fetch(`/api/import/${currentConnectionId}`, {
-            method: 'POST',
-            body: formData
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            showSuccessMessage(result.message);
-        } else {
-            showErrorMessage(result.error);
-        }
-    } catch (error) {
-        showErrorMessage('导入数据失败：' + error.message);
-    } finally {
-        hideLoading();
-    }
-}
-
-// 导出数据
-async function exportData() {
-    const sourceTable = $('#exportSourceTable').val();
-    const format = $('#exportFormat').val();
-    const whereClause = $('#exportWhereClause').val();
-
-    if (!sourceTable) {
-        showErrorMessage('请选择源表');
-        return;
-    }
-
-    try {
-        showLoading('正在导出数据...');
-
-        const response = await fetch(`/api/export/${currentConnectionId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                sourceTable: sourceTable,
-                format: format,
-                whereClause: whereClause
-            })
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            // 下载文件
-            const blob = new Blob([result.data], { type: format === 'csv' ? 'text/csv' : 'application/json' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${sourceTable}.${format}`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-
-            showSuccessMessage('数据导出成功');
-        } else {
-            showErrorMessage(result.error);
-        }
-    } catch (error) {
-        showErrorMessage('导出数据失败：' + error.message);
     } finally {
         hideLoading();
     }
@@ -3692,114 +3634,337 @@ function formatSQL() {
     }
 }
 
-// 专业SQL格式化算法
-function formatSQLProfessional(sql) {
+// SQL代码片段定义
+const sqlSnippets = {
+    // SELECT语句片段
+    'select': {
+        prefix: 'select',
+        body: 'SELECT ${1:*}\nFROM ${2:table_name}\nWHERE ${3:condition};',
+        description: '基本SELECT查询'
+    },
+    'select-join': {
+        prefix: 'select-join',
+        body: 'SELECT ${1:columns}\nFROM ${2:table1}\n${3:INNER} JOIN ${4:table2} ON ${5:condition}\nWHERE ${6:condition};',
+        description: '带JOIN的SELECT查询'
+    },
+    'select-group': {
+        prefix: 'select-group',
+        body: 'SELECT ${1:column}, ${2:COUNT(*)}\nFROM ${3:table_name}\nGROUP BY ${1:column}\nHAVING ${4:condition};',
+        description: '带GROUP BY的SELECT查询'
+    },
+
+    // INSERT语句片段
+    'insert': {
+        prefix: 'insert',
+        body: 'INSERT INTO ${1:table_name} (${2:columns})\nVALUES (${3:values});',
+        description: '基本INSERT语句'
+    },
+    'insert-select': {
+        prefix: 'insert-select',
+        body: 'INSERT INTO ${1:table_name} (${2:columns})\nSELECT ${3:columns}\nFROM ${4:source_table}\nWHERE ${5:condition};',
+        description: 'INSERT SELECT语句'
+    },
+
+    // UPDATE语句片段
+    'update': {
+        prefix: 'update',
+        body: 'UPDATE ${1:table_name}\nSET ${2:column} = ${3:value}\nWHERE ${4:condition};',
+        description: '基本UPDATE语句'
+    },
+
+    // DELETE语句片段
+    'delete': {
+        prefix: 'delete',
+        body: 'DELETE FROM ${1:table_name}\nWHERE ${2:condition};',
+        description: '基本DELETE语句'
+    },
+
+    // CREATE语句片段
+    'create-table': {
+        prefix: 'create-table',
+        body: 'CREATE TABLE ${1:table_name} (\n    ${2:id} INT PRIMARY KEY AUTO_INCREMENT,\n    ${3:name} VARCHAR(255) NOT NULL,\n    ${4:created_at} TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);',
+        description: '创建表'
+    },
+    'create-index': {
+        prefix: 'create-index',
+        body: 'CREATE INDEX ${1:index_name} ON ${2:table_name} (${3:column});',
+        description: '创建索引'
+    },
+
+    // 事务处理片段
+    'transaction': {
+        prefix: 'transaction',
+        body: 'START TRANSACTION;\n\n${1:-- SQL statements here}\n\nCOMMIT;\n-- ROLLBACK;',
+        description: '事务处理'
+    },
+
+    // 条件语句片段
+    'case': {
+        prefix: 'case',
+        body: 'CASE \n    WHEN ${1:condition} THEN ${2:result}\n    WHEN ${3:condition} THEN ${4:result}\n    ELSE ${5:default_result}\nEND',
+        description: 'CASE语句'
+    },
+
+    // 窗口函数片段
+    'window-function': {
+        prefix: 'window-function',
+        body: '${1:ROW_NUMBER()} OVER (\n    PARTITION BY ${2:partition_column}\n    ORDER BY ${3:order_column}\n)',
+        description: '窗口函数'
+    },
+
+    // CTE片段
+    'with': {
+        prefix: 'with',
+        body: 'WITH ${1:cte_name} AS (\n    SELECT ${2:columns}\n    FROM ${3:table_name}\n    WHERE ${4:condition}\n)\nSELECT ${5:columns}\nFROM ${1:cte_name};',
+        description: 'CTE (Common Table Expression)'
+    }
+};
+
+// 增强的专业SQL格式化算法
+function formatSQLProfessional(sql, options = {}) {
+    const {
+        indentSize = 4,
+        keywordCase = 'upper',
+        commaStyle = 'after', // 'before' or 'after'
+        maxLineLength = 120,
+        alignColumns = false,
+        removeComments = false
+    } = options;
+
     // 移除注释（可选）
-    let formatted = sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    let formatted = removeComments ?
+        sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '') :
+        sql;
 
-    // 关键字列表
+    // 标准化空白字符
+    formatted = formatted.replace(/\s+/g, ' ').trim();
+
+    // 关键字和操作符列表（按优先级排序）
     const keywords = [
+        // 主要关键字
         'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET',
-        'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'JOIN', 'INNER',
-        'LEFT', 'RIGHT', 'FULL', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING',
-        'LIMIT', 'OFFSET', 'UNION', 'DISTINCT', 'AND', 'OR', 'NOT', 'IN', 'LIKE',
-        'BETWEEN', 'IS', 'NULL', 'TRUE', 'FALSE', 'AS', 'CASE', 'WHEN', 'THEN',
-        'ELSE', 'END', 'EXISTS', 'NOT EXISTS', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN'
+        'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW',
+
+        // JOIN相关
+        'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'OUTER JOIN',
+        'CROSS JOIN', 'NATURAL JOIN', 'ON', 'USING',
+
+        // GROUP和ORDER
+        'GROUP BY', 'ORDER BY', 'HAVING',
+
+        // 限制和分页
+        'LIMIT', 'OFFSET', 'TOP', 'FETCH',
+
+        // 集合操作
+        'UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT', 'DISTINCT',
+
+        // 条件操作符
+        'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL', 'EXISTS',
+        'NOT EXISTS', 'ANY', 'ALL', 'SOME',
+
+        // 比较操作符
+        '=', '!=', '<>', '<', '>', '<=', '>=',
+
+        // CASE语句
+        'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+
+        // 函数
+        'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'ROUND', 'CEILING', 'FLOOR',
+        'CONCAT', 'SUBSTRING', 'LENGTH', 'LOWER', 'UPPER', 'TRIM', 'REPLACE',
+        'NOW', 'CURDATE', 'CURTIME', 'DATE_FORMAT', 'DATE_ADD', 'DATE_SUB',
+        'DATEDIFF', 'IF', 'COALESCE', 'NULLIF', 'ABS', 'MOD'
     ];
 
-    // 函数列表
-    const functions = [
-        'CONCAT', 'SUBSTRING', 'LENGTH', 'LOWER', 'UPPER', 'TRIM', 'NOW',
-        'CURDATE', 'CURTIME', 'DATE_FORMAT', 'DATE_ADD', 'DATE_SUB', 'DATEDIFF',
-        'IF', 'COALESCE', 'NULLIF', 'ROUND', 'CEILING', 'FLOOR', 'ABS'
-    ];
-
-    // 按关键字优先级排序
+    // 按长度排序，确保长关键字优先匹配
     const sortedKeywords = keywords.sort((a, b) => b.length - a.length);
 
-    // 逐行处理
-    const lines = formatted.split('\n');
-    let result = '';
-    let indentLevel = 0;
-    const indentSize = 4;
+    // SQL语句结构规则
+    const structureRules = {
+        // 需要换行的关键字
+        breakBefore: [
+            'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING',
+            'LIMIT', 'UNION', 'INTERSECT', 'EXCEPT', 'AND', 'OR', 'ON'
+        ],
 
-    for (let line of lines) {
-        line = line.trim();
-        if (!line) continue;
+        // 需要增加缩进的关键字
+        increaseIndent: [
+            'FROM', 'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN',
+            'FULL JOIN', 'OUTER JOIN', 'WHERE', 'HAVING', 'CASE', 'WHEN'
+        ],
 
-        // 检查是否包含需要换行的关键字
-        let shouldBreakLine = false;
-        let newIndentLevel = indentLevel;
+        // 需要减少缩进的关键字
+        decreaseIndent: [
+            'GROUP BY', 'ORDER BY', 'LIMIT', 'END', 'ELSE'
+        ]
+    };
 
-        // 检查减少缩进的关键字
-        if (/\b(WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|AND|OR)\b/i.test(line)) {
-            shouldBreakLine = true;
+    // 格式化函数
+    function formatKeywordCase(text) {
+        if (keywordCase === 'upper') {
+            sortedKeywords.forEach(keyword => {
+                const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+                text = text.replace(regex, keyword.toUpperCase());
+            });
+        } else if (keywordCase === 'lower') {
+            sortedKeywords.forEach(keyword => {
+                const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+                text = text.replace(regex, keyword.toLowerCase());
+            });
         }
-
-        // 检查增加缩进的关键字
-        if (/\b(FROM|JOIN|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|OUTER JOIN)\b/i.test(line)) {
-            shouldBreakLine = true;
-        }
-
-        // 格式化关键字为大写
-        sortedKeywords.forEach(keyword => {
-            const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-            line = line.replace(regex, keyword.toUpperCase());
-        });
-
-        // 格式化函数名
-        functions.forEach(func => {
-            const regex = new RegExp(`\\b${func}\\b`, 'gi');
-            line = line.replace(regex, func.toUpperCase());
-        });
-
-        // 添加缩进和换行
-        if (shouldBreakLine) {
-            result += '\n' + ' '.repeat(indentLevel * indentSize) + line;
-        } else {
-            result += line;
-        }
-
-        // 处理括号缩进
-        const openBrackets = (line.match(/\(/g) || []).length;
-        const closeBrackets = (line.match(/\)/g) || []).length;
-
-        if (openBrackets > closeBrackets) {
-            indentLevel++;
-        }
-        if (closeBrackets > openBrackets) {
-            indentLevel--;
-        }
-
-        result += ' ';
+        return text;
     }
 
-    // 后处理：美化逗号和操作符
-    result = result
-        .replace(/,/g, ',\n    ')
-        .replace(/\bAND\b/gi, '\n    AND')
-        .replace(/\bOR\b/gi, '\n    OR')
-        .replace(/\s+/g, ' ')
-        .replace(/\n\s+/g, '\n')
-        .replace(/\s+FROM\s+/gi, '\nFROM ')
-        .replace(/\s+WHERE\s+/gi, '\nWHERE ')
-        .replace(/\s+GROUP BY\s+/gi, '\nGROUP BY ')
-        .replace(/\s+ORDER BY\s+/gi, '\nORDER BY ')
-        .replace(/\s+HAVING\s+/gi, '\nHAVING ')
-        .replace(/\s+LIMIT\s+/gi, '\nLIMIT ')
-        .replace(/\s+INNER JOIN\s+/gi, '\n    INNER JOIN ')
-        .replace(/\s+LEFT JOIN\s+/gi, '\n    LEFT JOIN ')
-        .replace(/\s+RIGHT JOIN\s+/gi, '\n    RIGHT JOIN ')
-        .replace(/\s+FULL JOIN\s+/gi, '\n    FULL JOIN ')
-        .replace(/\s+OUTER JOIN\s+/gi, '\n    OUTER JOIN ')
-        .replace(/\s+ON\s+/gi, '\n        ON ')
-        .trim();
+    // 格式化逗号
+    function formatCommas(text) {
+        if (commaStyle === 'before') {
+            return text.replace(/,\s*/g, '\n' + ' '.repeat(indentSize) + ', ');
+        } else {
+            return text.replace(/,\s*/g, ',\n' + ' '.repeat(indentSize));
+        }
+    }
 
-    return result;
+    // 主要格式化逻辑
+    function formatStatement(text) {
+        let result = '';
+        let currentIndent = 0;
+        let lines = text.split('\n');
+
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+
+            // 检查是否需要在前面换行
+            let needsBreakBefore = false;
+            for (let keyword of structureRules.breakBefore) {
+                if (new RegExp(`\\b${keyword}\\b`, 'i').test(line)) {
+                    needsBreakBefore = true;
+                    break;
+                }
+            }
+
+            if (needsBreakBefore && result) {
+                result += '\n';
+            }
+
+            // 检查缩进变化
+            let shouldIncreaseIndent = false;
+            let shouldDecreaseIndent = false;
+
+            for (let keyword of structureRules.increaseIndent) {
+                if (new RegExp(`\\b${keyword}\\b`, 'i').test(line)) {
+                    shouldIncreaseIndent = true;
+                    break;
+                }
+            }
+
+            for (let keyword of structureRules.decreaseIndent) {
+                if (new RegExp(`\\b${keyword}\\b`, 'i').test(line)) {
+                    shouldDecreaseIndent = true;
+                    break;
+                }
+            }
+
+            // 应用缩进变化
+            if (shouldDecreaseIndent && currentIndent > 0) {
+                currentIndent--;
+            }
+
+            // 添加缩进
+            result += ' '.repeat(currentIndent * indentSize);
+
+            // 添加行内容
+            result += line;
+
+            // 处理括号缩进
+            let openParens = (line.match(/\(/g) || []).length;
+            let closeParens = (line.match(/\)/g) || []).length;
+
+            if (openParens > closeParens) {
+                currentIndent += openParens - closeParens;
+            } else if (closeParens > openParens) {
+                currentIndent = Math.max(0, currentIndent - (closeParens - openParens));
+            }
+
+            // 应用缩进增加
+            if (shouldIncreaseIndent) {
+                currentIndent++;
+            }
+
+            result += '\n';
+        }
+
+        return result.trim();
+    }
+
+    // 处理长行分割
+    function splitLongLines(text) {
+        const lines = text.split('\n');
+        const result = [];
+
+        for (let line of lines) {
+            if (line.length <= maxLineLength) {
+                result.push(line);
+                continue;
+            }
+
+            // 在逗号或操作符处分割
+            const parts = line.split(/,(?![^()]*\))/);
+            if (parts.length > 1) {
+                let currentLine = parts[0];
+                for (let i = 1; i < parts.length; i++) {
+                    if (currentLine.length + parts[i].length + 1 > maxLineLength) {
+                        result.push(currentLine);
+                        currentLine = ' '.repeat(indentSize) + parts[i];
+                    } else {
+                        currentLine += ', ' + parts[i];
+                    }
+                }
+                result.push(currentLine);
+            } else {
+                result.push(line);
+            }
+        }
+
+        return result.join('\n');
+    }
+
+    // 应用所有格式化步骤
+    formatted = formatKeywordCase(formatted);
+    formatted = formatStatement(formatted);
+    formatted = formatCommas(formatted);
+    formatted = splitLongLines(formatted);
+
+    // 清理多余的空行
+    formatted = formatted.replace(/\n\s*\n\s*\n/g, '\n\n');
+
+    return formatted;
+}
+
+// 快速SQL格式化（简化版本）
+function formatSQL() {
+    const sql = sqlEditor ? sqlEditor.getValue() : $('#sqlEditor').val();
+    if (!sql.trim()) return;
+
+    const formatted = formatSQLProfessional(sql, {
+        indentSize: 4,
+        keywordCase: 'upper',
+        commaStyle: 'after'
+    });
+
+    if (sqlEditor) {
+        sqlEditor.setValue(formatted);
+    } else {
+        $('#sqlEditor').val(formatted);
+    }
+
+    showNotification('SQL快速格式化完成', 'success');
 }
 
 // 显示SQL格式化设置模态框
 function showSQLFormatModal() {
+    const sql = sqlEditor.getValue();
+    $('#formatPreviewOriginal').val(sql);
+    $('#syntaxCheckResult').addClass('d-none');
     $('#sqlFormatModal').modal('show');
 }
 
@@ -3807,7 +3972,10 @@ function showSQLFormatModal() {
 function applySQLFormat() {
     const indentSize = parseInt($('#formatIndentSize').val());
     const keywordCase = $('#formatKeywordCase').val();
-    const commaBefore = $('#formatCommaBefore').prop('checked');
+    const commaStyle = $('#formatCommaStyle').val();
+    const maxLineLength = parseInt($('#formatMaxLineLength').val());
+    const removeComments = $('#formatRemoveComments').prop('checked');
+    const alignColumns = $('#formatAlignColumns').prop('checked');
 
     let sql = sqlEditor.getValue();
     if (!sql.trim()) {
@@ -3816,40 +3984,221 @@ function applySQLFormat() {
     }
 
     try {
-        let formatted = sql;
-        const indent = ' '.repeat(indentSize);
+        const formatted = formatSQLProfessional(sql, {
+            indentSize: indentSize,
+            keywordCase: keywordCase,
+            commaStyle: commaStyle,
+            maxLineLength: maxLineLength,
+            removeComments: removeComments,
+            alignColumns: alignColumns
+        });
 
-        // 应用关键字大小写
-        if (keywordCase === 'upper') {
-            formatted = formatted.replace(/\b(select|from|where|insert|into|values|update|set|delete|create|table|alter|drop|index|join|inner|left|right|full|outer|on|group|by|order|having|limit|offset|union|distinct|count|sum|avg|max|min|and|or|not|in|like|between|is|null)\b/gi, match => match.toUpperCase());
-        } else if (keywordCase === 'lower') {
-            formatted = formatted.replace(/\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|INDEX|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|ON|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|UNION|DISTINCT|COUNT|SUM|AVG|MAX|MIN|AND|OR|NOT|IN|LIKE|BETWEEN|IS|NULL)\b/g, match => match.toLowerCase());
-        }
-
-        // 应用缩进和换行
-        formatted = formatted
-            .replace(/\s+/g, ' ')
-            .replace(/\s*(SELECT)\s*/i, '\nSELECT ')
-            .replace(/\s*(FROM)\s+/i, '\nFROM ')
-            .replace(/\s*(WHERE)\s+/i, '\nWHERE ')
-            .replace(/\s*(GROUP\s+BY)\s+/i, '\nGROUP BY ')
-            .replace(/\s*(ORDER\s+BY)\s+/i, '\nORDER BY ')
-            .replace(/\s*(HAVING)\s+/i, '\nHAVING ')
-            .replace(/\s*(LIMIT)\s+/i, '\nLIMIT ');
-
-        if (commaBefore) {
-            formatted = formatted.replace(/,/g, ',\n' + indent);
-        } else {
-            formatted = formatted.replace(/,/g, ',\n' + indent);
-        }
-
-        sqlEditor.setValue(formatted.trim());
+        sqlEditor.setValue(formatted);
         sqlEditor.clearSelection();
         $('#sqlFormatModal').modal('hide');
         showNotification('SQL格式化完成', 'success');
     } catch (error) {
         showNotification('SQL格式化失败: ' + error.message, 'error');
     }
+}
+
+// 预览SQL格式化效果
+function previewSQLFormat() {
+    const sql = sqlEditor.getValue();
+    if (!sql.trim()) {
+        showNotification('SQL编辑器为空', 'warning');
+        return;
+    }
+
+    try {
+        const indentSize = parseInt($('#formatIndentSize').val());
+        const keywordCase = $('#formatKeywordCase').val();
+        const commaStyle = $('#formatCommaStyle').val();
+        const maxLineLength = parseInt($('#formatMaxLineLength').val());
+        const removeComments = $('#formatRemoveComments').prop('checked');
+        const alignColumns = $('#formatAlignColumns').prop('checked');
+
+        const formatted = formatSQLProfessional(sql, {
+            indentSize: indentSize,
+            keywordCase: keywordCase,
+            commaStyle: commaStyle,
+            maxLineLength: maxLineLength,
+            removeComments: removeComments,
+            alignColumns: alignColumns
+        });
+
+        $('#formatPreviewOriginal').val(sql);
+        $('#formatPreviewFormatted').val(formatted);
+        showNotification('预览生成完成', 'success');
+    } catch (error) {
+        showNotification('预览生成失败: ' + error.message, 'error');
+    }
+}
+
+// 压缩当前SQL
+function minifyCurrentSQL() {
+    const sql = sqlEditor.getValue();
+    if (!sql.trim()) {
+        showNotification('SQL编辑器为空', 'warning');
+        return;
+    }
+
+    try {
+        const minified = minifySQL(sql);
+        sqlEditor.setValue(minified);
+        sqlEditor.clearSelection();
+        showNotification('SQL压缩完成', 'success');
+    } catch (error) {
+        showNotification('SQL压缩失败: ' + error.message, 'error');
+    }
+}
+
+// 格式化当前SQL的注释
+function formatCurrentSQLComments() {
+    const sql = sqlEditor.getValue();
+    if (!sql.trim()) {
+        showNotification('SQL编辑器为空', 'warning');
+        return;
+    }
+
+    try {
+        const formatted = formatSQLComments(sql);
+        sqlEditor.setValue(formatted);
+        sqlEditor.clearSelection();
+        showNotification('注释格式化完成', 'success');
+    } catch (error) {
+        showNotification('注释格式化失败: ' + error.message, 'error');
+    }
+}
+
+// 验证当前SQL语法
+function validateCurrentSQL() {
+    const sql = sqlEditor.getValue();
+    if (!sql.trim()) {
+        showNotification('SQL编辑器为空', 'warning');
+        return;
+    }
+
+    try {
+        const validation = validateSQLSyntax(sql);
+        const resultDiv = $('#syntaxCheckResult');
+
+        if (validation.valid) {
+            resultDiv.removeClass('alert-danger alert-warning').addClass('alert-success');
+            resultDiv.html('<i class="fas fa-check-circle"></i> SQL语法检查通过，没有发现错误');
+        } else {
+            resultDiv.removeClass('alert-success alert-warning').addClass('alert-danger');
+            resultDiv.html('<i class="fas fa-exclamation-triangle"></i> 发现语法错误：<ul><li>' + validation.errors.join('</li><li>') + '</li></ul>');
+        }
+
+        resultDiv.removeClass('d-none');
+    } catch (error) {
+        showNotification('语法检查失败: ' + error.message, 'error');
+    }
+}
+
+// SQL语法检查
+function validateSQLSyntax(sql) {
+    const errors = [];
+
+    // 基础语法检查
+    const parentheses = sql.match(/\(/g) || [];
+    const parenthesesClose = sql.match(/\)/g) || [];
+    if (parentheses.length !== parenthesesClose.length) {
+        errors.push('括号不匹配');
+    }
+
+    // 检查未闭合的引号
+    const singleQuotes = sql.match(/'/g) || [];
+    if (singleQuotes.length % 2 !== 0) {
+        errors.push('单引号不匹配');
+    }
+
+    const doubleQuotes = sql.match(/"/g) || [];
+    if (doubleQuotes.length % 2 !== 0) {
+        errors.push('双引号不匹配');
+    }
+
+    // 检查常见语法错误
+    const commonErrors = [
+        { pattern: /\bSELECT\s+FROM\b/i, message: 'SELECT语句缺少字段' },
+        { pattern: /\bFROM\s+WHERE\b/i, message: 'FROM语句缺少表名' },
+        { pattern: /\bWHERE\s+(?:GROUP BY|ORDER BY|HAVING|LIMIT)\b/i, message: 'WHERE语句缺少条件' },
+        { pattern: /\bGROUP BY\s+(?:ORDER BY|HAVING|LIMIT)\b/i, message: 'GROUP BY语句缺少字段' },
+        { pattern: /\bORDER BY\s+(?:GROUP BY|HAVING|LIMIT)\b/i, message: 'ORDER BY语句缺少字段' },
+        { pattern: /\bINSERT\s+INTO\s+(?:VALUES|SELECT)\b/i, message: 'INSERT语句缺少表名' },
+        { pattern: /\bUPDATE\s+SET\b/i, message: 'UPDATE语句缺少表名' },
+        { pattern: /\bDELETE\s+FROM\s+WHERE\b/i, message: 'DELETE语句缺少表名' }
+    ];
+
+    commonErrors.forEach(error => {
+        if (error.pattern.test(sql)) {
+            errors.push(error.message);
+        }
+    });
+
+    return {
+        valid: errors.length === 0,
+        errors: errors
+    };
+}
+
+// 高级SQL格式化（包含语法检查）
+function formatAndValidateSQL() {
+    const sql = sqlEditor.getValue();
+    if (!sql.trim()) {
+        showNotification('SQL编辑器为空', 'warning');
+        return;
+    }
+
+    try {
+        // 首先进行语法检查
+        const validation = validateSQLSyntax(sql);
+
+        if (!validation.valid) {
+            showNotification('SQL语法错误：' + validation.errors.join(', '), 'error');
+            return;
+        }
+
+        // 格式化SQL
+        const formatted = formatSQLProfessional(sql, {
+            indentSize: 4,
+            keywordCase: 'upper',
+            commaStyle: 'after',
+            maxLineLength: 120,
+            removeComments: false
+        });
+
+        sqlEditor.setValue(formatted);
+        sqlEditor.clearSelection();
+        showNotification('SQL格式化和语法检查完成', 'success');
+    } catch (error) {
+        showNotification('SQL处理失败: ' + error.message, 'error');
+    }
+}
+
+// SQL压缩功能
+function minifySQL(sql) {
+    return sql
+        .replace(/--.*$/gm, '') // 移除单行注释
+        .replace(/\/\*[\s\S]*?\*\//g, '') // 移除多行注释
+        .replace(/\s+/g, ' ') // 压缩空白字符
+        .replace(/\s*,\s*/g, ',') // 压缩逗号周围的空格
+        .replace(/\s*([()=<>!])\s*/g, '$1') // 压缩操作符周围的空格
+        .trim();
+}
+
+// SQL注释格式化
+function formatSQLComments(sql) {
+    // 标准化注释格式
+    return sql
+        .replace(/--\s*/g, '-- ') // 确保单行注释后有空格
+        .replace(/\/\*\s*/g, '/* ') // 确保多行注释开始后有空格
+        .replace(/\s*\*\//g, ' */') // 确保多行注释结束前有空格
+        .replace(/\/\*[\s\S]*?\*\//g, match => {
+            // 格式化多行注释
+            return match.replace(/\n\s*\*/g, '\n *');
+        });
 }
 
 // 保存SQL脚本
@@ -5623,102 +5972,6 @@ function updateEditorLabel(label) {
     }
 }
 
-// 设置SQL自动补全
-function setupSQLAutocompletion() {
-    if (!sqlEditor) return;
-
-    // SQL关键字
-    const sqlKeywords = [
-        'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET',
-        'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'JOIN', 'INNER',
-        'LEFT', 'RIGHT', 'FULL', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING',
-        'LIMIT', 'OFFSET', 'UNION', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN',
-        'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL', 'TRUE', 'FALSE',
-        'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'CONSTRAINT', 'DEFAULT', 'CHECK',
-        'AUTO_INCREMENT', 'TIMESTAMP', 'CURRENT_TIMESTAMP', 'DATABASE', 'SCHEMA'
-    ];
-
-    // SQL函数
-    const sqlFunctions = [
-        'COUNT()', 'SUM()', 'AVG()', 'MAX()', 'MIN()', 'CONCAT()', 'SUBSTRING()',
-        'LENGTH()', 'UPPER()', 'LOWER()', 'TRIM()', 'NOW()', 'CURDATE()', 'CURTIME()',
-        'DATE()', 'TIME()', 'YEAR()', 'MONTH()', 'DAY()', 'HOUR()', 'MINUTE()', 'SECOND()',
-        'IF()', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'COALESCE()', 'NULLIF()',
-        'ROUND()', 'CEIL()', 'FLOOR()', 'ABS()', 'MOD()', 'POW()', 'SQRT()'
-    ];
-
-    const completer = {
-        getCompletions: function(editor, session, pos, prefix, callback) {
-            const line = session.getLine(pos.row);
-            const textBeforeCursor = line.substring(0, pos.column);
-
-            let suggestions = [];
-
-            // 分析SQL上下文
-            const context = analyzeSQLContext(textBeforeCursor);
-
-            switch(context.type) {
-                case 'table':
-                    suggestions = getTableSuggestions(prefix);
-                    break;
-                case 'column':
-                    suggestions = getColumnSuggestions(context.tableName, prefix);
-                    break;
-                case 'function':
-                    suggestions = sqlFunctions.filter(func =>
-                        func.toLowerCase().includes(prefix.toLowerCase())
-                    ).map(func => ({
-                        caption: func,
-                        value: func,
-                        meta: 'function',
-                        score: 1000
-                    }));
-                    break;
-                case 'create_table':
-                    suggestions = getCreateTableSuggestions(prefix);
-                    break;
-                case 'alter_table':
-                    suggestions = getAlterTableSuggestions(prefix);
-                    break;
-                case 'insert_into':
-                    suggestions = getInsertIntoSuggestions(prefix);
-                    break;
-                case 'update_set':
-                    suggestions = getUpdateSetSuggestions(prefix);
-                    break;
-                case 'delete_from':
-                    suggestions = getDeleteFromSuggestions(prefix);
-                    break;
-                case 'select_columns':
-                    suggestions = getSelectColumnsSuggestions(prefix);
-                    break;
-                case 'where_condition':
-                    suggestions = getWhereConditionSuggestions(prefix);
-                    break;
-                default:
-                    suggestions = sqlKeywords.filter(keyword =>
-                        keyword.toLowerCase().includes(prefix.toLowerCase())
-                    ).map(keyword => ({
-                        caption: keyword,
-                        value: keyword,
-                        meta: 'keyword',
-                        score: 100
-                    }));
-            }
-
-            callback(null, suggestions);
-        }
-    };
-
-    sqlEditor.completers = [completer];
-
-    // 启用自动触发
-    sqlEditor.setOptions({
-        enableLiveAutocompletion: true,
-        enableBasicAutocompletion: true,
-        enableSnippets: true
-    });
-}
 
 
 
@@ -6152,52 +6405,6 @@ function getWhereConditionSuggestions(prefix) {
 }
 
 // SQL自动补全设置
-function setupSQLAutocompletion() {
-    if (!sqlEditor) return;
-
-    console.log('设置SQL自动补全');
-
-    const sqlCompleter = {
-        getCompletions: function(editor, session, pos, prefix, callback) {
-            console.log('SQL自动补全触发, prefix:', prefix);
-            const line = session.getLine(pos.row);
-            const context = analyzeSQLContext(line, pos.column);
-            console.log('SQL上下文分析:', context);
-
-            let suggestions = [];
-
-            if (context.statementType === 'CREATE TABLE') {
-                suggestions = getCreateTableSuggestions(prefix, context);
-            } else if (context.statementType === 'INSERT INTO') {
-                suggestions = getInsertIntoSuggestions(prefix, context);
-            } else if (context.statementType === 'SELECT') {
-                suggestions = getSelectSuggestions(prefix, context);
-            } else if (context.clauseType === 'WHERE') {
-                suggestions = getWhereSuggestions(prefix, context);
-            } else if (context.clauseType === 'JOIN') {
-                suggestions = getJoinSuggestions(prefix, context);
-            } else {
-                suggestions = getGeneralSQLSuggestions(prefix, context);
-            }
-
-            console.log('SQL建议数量:', suggestions.length);
-            callback(null, suggestions);
-        }
-    };
-
-    // 清除现有的自动补全器并添加新的
-    sqlEditor.completers = [];
-    sqlEditor.completers.push(sqlCompleter);
-
-    // 确保自动补全功能启用
-    sqlEditor.setOptions({
-        enableBasicAutocompletion: true,
-        enableLiveAutocompletion: true,
-        enableSnippets: true
-    });
-
-    console.log('SQL自动补全设置完成, 补全器数量:', sqlEditor.completers.length);
-}
 
 
 // 分析SQL上下文
@@ -6507,6 +6714,9 @@ async function onConnectionChange() {
 
         // 加载数据库列表
         await loadDatabases(connectionId);
+
+        // 更新备份恢复的数据库选择器
+        updateDatabaseSelects();
     }
 }
 
@@ -6915,7 +7125,7 @@ function switchEditorMode(connectionType) {
         sqlEditor.session.setMode("ace/mode/sql");
         console.log('✅ [DEBUG] 编辑器模式已设置为sql模式');
 
-        setupSQLAutocompletion();
+        setupEnhancedSQLAutocompletion();
         console.log('✅ [DEBUG] SQL自动补全已设置');
 
         updateEditorLabel('SQL查询编辑器');
@@ -7483,45 +7693,6 @@ function getRedisKeySuggestions(type, prefix) {
 }
 
 // SQL自动补全设置函数
-function setupSQLAutocompletion() {
-    console.log('设置SQL自动补全...');
-
-    if (!sqlEditor) {
-        console.error('编辑器未初始化');
-        return;
-    }
-
-    const sqlCompleter = {
-        getCompletions: function(editor, session, pos, prefix, callback) {
-            console.log('SQL自动补全触发，前缀:', prefix);
-
-            const line = session.getLine(pos.row);
-            const context = analyzeSQLContext(line, pos.column);
-
-            let suggestions = [];
-
-            if (context.statementType === 'CREATE_TABLE') {
-                suggestions = getCreateTableSuggestions(context, prefix);
-            } else if (context.statementType === 'INSERT') {
-                suggestions = getInsertSuggestions(context, prefix);
-            } else if (context.statementType === 'SELECT') {
-                suggestions = getSelectSuggestions(context, prefix);
-            } else if (context.statementType === 'WHERE') {
-                suggestions = getWhereSuggestions(context, prefix);
-            } else if (context.statementType === 'JOIN') {
-                suggestions = getJoinSuggestions(context, prefix);
-            } else {
-                suggestions = getGeneralSQLSuggestions(context, prefix);
-            }
-
-            console.log('SQL建议数量:', suggestions.length);
-            callback(null, suggestions);
-        }
-    };
-
-    sqlEditor.completers = [sqlCompleter];
-    console.log('SQL自动补全设置完成');
-}
 
 // SQL上下文分析函数
 function analyzeSQLContext(line, column) {
@@ -9397,4 +9568,1531 @@ function refreshTable() {
     }
 }
 
+// ========== 查询历史管理功能 ==========
+
+// 查询历史数据存储
+let queryHistory = [];
+
+// 初始化查询历史
+function initQueryHistory() {
+    // 从localStorage加载查询历史
+    const saved = localStorage.getItem('queryHistory');
+    if (saved) {
+        try {
+            queryHistory = JSON.parse(saved);
+            console.log('Loaded query history:', queryHistory.length, 'records');
+        } catch (error) {
+            console.error('Error loading query history:', error);
+            queryHistory = [];
+        }
+    }
+}
+
+// 保存查询历史到localStorage
+function saveQueryHistory() {
+    try {
+        localStorage.setItem('queryHistory', JSON.stringify(queryHistory));
+    } catch (error) {
+        console.error('Error saving query history:', error);
+    }
+}
+
+// 添加查询历史记录
+function addQueryHistory(sql, connectionId, database, executionTime, affectedRows) {
+    if (!sql || sql.trim() === '') return;
+
+    // 避免重复记录相同的查询
+    const lastQuery = queryHistory[queryHistory.length - 1];
+    if (lastQuery && lastQuery.sql === sql.trim() &&
+        Date.now() - new Date(lastQuery.timestamp).getTime() < 5000) {
+        return;
+    }
+
+    const queryType = getQueryType(sql);
+    const record = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        sql: sql.trim(),
+        connectionId: connectionId,
+        database: database || 'unknown',
+        queryType: queryType,
+        executionTime: executionTime || 0,
+        affectedRows: affectedRows || 0
+    };
+
+    queryHistory.push(record);
+
+    // 限制历史记录数量（最多1000条）
+    if (queryHistory.length > 1000) {
+        queryHistory = queryHistory.slice(-1000);
+    }
+
+    saveQueryHistory();
+    console.log('Added query history:', queryType);
+}
+
+// 获取查询类型
+function getQueryType(sql) {
+    const firstWord = sql.trim().toUpperCase().split(' ')[0];
+    switch (firstWord) {
+        case 'SELECT': return 'SELECT';
+        case 'INSERT': return 'INSERT';
+        case 'UPDATE': return 'UPDATE';
+        case 'DELETE': return 'DELETE';
+        case 'CREATE': return 'CREATE';
+        case 'DROP': return 'DROP';
+        case 'ALTER': return 'ALTER';
+        case 'TRUNCATE': return 'TRUNCATE';
+        case 'SHOW': return 'SHOW';
+        case 'DESCRIBE': return 'DESCRIBE';
+        case 'EXPLAIN': return 'EXPLAIN';
+        default: return 'OTHER';
+    }
+}
+
+// 显示查询历史模态框
+function showQueryHistory() {
+    $('#queryHistoryModal').modal('show');
+    loadQueryHistoryTable();
+}
+
+// 加载查询历史表格
+function loadQueryHistoryTable() {
+    const tbody = $('#queryHistoryTable tbody');
+    tbody.empty();
+
+    if (queryHistory.length === 0) {
+        tbody.append('<tr><td colspan="7" class="text-center text-muted">暂无查询历史记录</td></tr>');
+        return;
+    }
+
+    // 按时间倒序显示
+    const sortedHistory = [...queryHistory].reverse();
+
+    sortedHistory.forEach(record => {
+        const row = $('<tr>');
+        const timeStr = new Date(record.timestamp).toLocaleString('zh-CN');
+        const sqlPreview = record.sql.length > 50 ?
+            record.sql.substring(0, 50) + '...' : record.sql;
+
+        row.html(`
+            <td>${timeStr}</td>
+            <td><small class="text-muted">${record.database}</small></td>
+            <td><span class="badge bg-${getQueryTypeBadgeClass(record.queryType)}">${record.queryType}</span></td>
+            <td><code class="sql-preview" title="${record.sql.replace(/"/g, '&quot;')}">${sqlPreview}</code></td>
+            <td>${record.executionTime}ms</td>
+            <td>${record.affectedRows}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" onclick="loadQueryFromHistory('${record.id}')" title="加载到编辑器">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-outline-success" onclick="executeQueryFromHistory('${record.id}')" title="重新执行">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="deleteQueryFromHistory('${record.id}')" title="删除">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </td>
+        `);
+        tbody.append(row);
+    });
+}
+
+// 获取查询类型对应的徽章样式
+function getQueryTypeBadgeClass(queryType) {
+    switch (queryType) {
+        case 'SELECT': return 'info';
+        case 'INSERT': return 'success';
+        case 'UPDATE': return 'warning';
+        case 'DELETE': return 'danger';
+        case 'CREATE': return 'primary';
+        case 'DROP': return 'danger';
+        case 'ALTER': return 'warning';
+        default: return 'secondary';
+    }
+}
+
+// 从历史记录加载查询到编辑器
+function loadQueryFromHistory(recordId) {
+    const record = queryHistory.find(q => q.id == recordId);
+    if (record && sqlEditor) {
+        sqlEditor.setValue(record.sql);
+        sqlEditor.focus();
+        $('#queryHistoryModal').modal('hide');
+        showNotification('查询已加载到编辑器', 'success');
+    }
+}
+
+// 从历史记录执行查询
+function executeQueryFromHistory(recordId) {
+    const record = queryHistory.find(q => q.id == recordId);
+    if (record) {
+        loadQueryFromHistory(recordId);
+        setTimeout(() => executeQuery(), 100);
+    }
+}
+
+// 从历史记录删除查询
+function deleteQueryFromHistory(recordId) {
+    if (!confirm('确定要删除这条查询历史吗？')) return;
+
+    queryHistory = queryHistory.filter(q => q.id != recordId);
+    saveQueryHistory();
+    loadQueryHistoryTable();
+    showNotification('查询历史已删除', 'success');
+}
+
+// 搜索查询历史
+function searchQueryHistory() {
+    const searchTerm = $('#queryHistorySearch').val().toLowerCase();
+    const rows = $('#queryHistoryTable tbody tr');
+
+    rows.each(function() {
+        const row = $(this);
+        const text = row.text().toLowerCase();
+        if (text.includes(searchTerm)) {
+            row.show();
+        } else {
+            row.hide();
+        }
+    });
+}
+
+// 清空查询历史
+function clearQueryHistory() {
+    if (!confirm('确定要清空所有查询历史吗？此操作不可恢复。')) return;
+
+    queryHistory = [];
+    saveQueryHistory();
+    loadQueryHistoryTable();
+    showNotification('查询历史已清空', 'success');
+}
+
+// 导出查询历史
+function exportQueryHistory() {
+    if (queryHistory.length === 0) {
+        showNotification('没有查询历史可以导出', 'warning');
+        return;
+    }
+
+    const csvContent = generateQueryHistoryCSV();
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+
+    link.setAttribute('href', url);
+    link.setAttribute('download', `query_history_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    showNotification('查询历史已导出', 'success');
+}
+
+// 生成查询历史CSV
+function generateQueryHistoryCSV() {
+    const headers = ['时间', '数据库', '查询类型', 'SQL语句', '执行时间(ms)', '影响行数'];
+    const rows = queryHistory.map(record => [
+        new Date(record.timestamp).toLocaleString('zh-CN'),
+        record.database,
+        record.queryType,
+        `"${record.sql.replace(/"/g, '""')}"`,
+        record.executionTime,
+        record.affectedRows
+    ]);
+
+    return [headers, ...rows]
+        .map(row => row.join(','))
+        .join('\n');
+}
+
+// 在应用初始化时初始化查询历史
+document.addEventListener('DOMContentLoaded', function() {
+    initQueryHistory();
+});
+
 // ========== 文件结束 ==========
+// ========== 增强的SQL自动补全功能 ==========
+
+// 增强的SQL上下文分析
+function analyzeEnhancedSQLContext(text, column) {
+    const textBefore = text.substring(0, column).toLowerCase();
+    const words = textBefore.trim().split(/\s+/).filter(w => w);
+
+    let context = {
+        statementType: 'GENERAL',
+        clauseType: '',
+        isSnippetTrigger: false,
+        tableAliases: new Map(),
+        currentTable: null,
+        position: { row: 0, column: column }
+    };
+
+    // 检测是否是代码片段触发器（以特定前缀开头）
+    const snippetPrefixes = ['select', 'insert', 'update', 'delete', 'create', 'with', 'case'];
+    if (words.length === 1 && snippetPrefixes.includes(words[0])) {
+        context.isSnippetTrigger = true;
+        return context;
+    }
+
+    // 检测语句类型
+    if (textBefore.includes('create table')) {
+        context.statementType = 'CREATE';
+    } else if (textBefore.includes('insert into')) {
+        context.statementType = 'INSERT';
+    } else if (textBefore.includes('update')) {
+        context.statementType = 'UPDATE';
+    } else if (textBefore.includes('delete from')) {
+        context.statementType = 'DELETE';
+    } else if (textBefore.includes('select')) {
+        context.statementType = 'SELECT';
+
+        // 分析SELECT语句的子句
+        const lastKeywords = [];
+        for (let i = words.length - 1; i >= 0; i--) {
+            if (['select', 'from', 'where', 'join', 'inner', 'left', 'right', 'full', 'group', 'order', 'having', 'limit'].includes(words[i])) {
+                lastKeywords.push(words[i]);
+            }
+        }
+
+        if (lastKeywords.includes('from') || lastKeywords.includes('join')) {
+            context.clauseType = 'FROM';
+        } else if (lastKeywords.includes('where')) {
+            context.clauseType = 'WHERE';
+        } else if (lastKeywords.includes('group') && lastKeywords.includes('by')) {
+            context.clauseType = 'GROUP BY';
+        } else if (lastKeywords.includes('order') && lastKeywords.includes('by')) {
+            context.clauseType = 'ORDER BY';
+        } else if (lastKeywords.includes('having')) {
+            context.clauseType = 'HAVING';
+        } else {
+            context.clauseType = 'SELECT';
+        }
+
+        // 提取表别名
+        extractTableAliases(textBefore, context.tableAliases);
+    }
+
+    return context;
+}
+
+// 提取表别名
+function extractTableAliases(text, aliases) {
+    const fromMatches = text.match(/from\s+(\w+)(?:\s+as\s+(\w+))?/gi);
+    const joinMatches = text.match(/(?:inner|left|right|full)\s+join\s+(\w+)(?:\s+as\s+(\w+))?/gi);
+
+    [fromMatches, joinMatches].forEach(matches => {
+        if (matches) {
+            matches.forEach(match => {
+                const parts = match.match(/(\w+)(?:\s+as\s+(\w+))?/i);
+                if (parts) {
+                    const table = parts[1];
+                    const alias = parts[2] || table;
+                    aliases.set(alias, table);
+                }
+            });
+        }
+    });
+}
+
+// 获取增强的SELECT建议
+function getEnhancedSelectSuggestions(prefix, context) {
+    let suggestions = [];
+
+    if (context.clauseType === 'SELECT') {
+        suggestions = [
+            { caption: '*', value: '*', meta: 'wildcard', doc: '所有字段', score: 1000 },
+            { caption: 'DISTINCT', value: 'DISTINCT', meta: 'keyword', doc: '去重', score: 900 },
+            { caption: 'COUNT(*)', value: 'COUNT(*)', meta: 'function', doc: '计数', score: 800 },
+            { caption: 'SUM()', value: 'SUM(', meta: 'function', doc: '求和', score: 800 },
+            { caption: 'AVG()', value: 'AVG(', meta: 'function', doc: '平均值', score: 800 },
+            { caption: 'MAX()', value: 'MAX(', meta: 'function', doc: '最大值', score: 800 },
+            { caption: 'MIN()', value: 'MIN(', meta: 'function', doc: '最小值', score: 800 },
+            { caption: 'ROW_NUMBER()', value: 'ROW_NUMBER()', meta: 'window', doc: '行号', score: 750 },
+            { caption: 'RANK()', value: 'RANK()', meta: 'window', doc: '排名', score: 750 },
+            { caption: 'DENSE_RANK()', value: 'DENSE_RANK()', meta: 'window', doc: '密集排名', score: 750 }
+        ];
+
+        // 添加当前可用表的字段
+        if (currentDbStructure && context.currentTable) {
+            const tableColumns = currentDbStructure.tables[context.currentTable] || [];
+            tableColumns.forEach(col => {
+                suggestions.push({
+                    caption: col.name,
+                    value: col.name,
+                    meta: 'column',
+                    doc: `${col.name} (${col.type})`,
+                    score: 850
+                });
+            });
+        }
+    } else if (context.clauseType === 'FROM') {
+        suggestions = getTableSuggestions(prefix, context);
+    } else if (context.clauseType === 'WHERE') {
+        suggestions = [
+            { caption: '=', value: '=', meta: 'operator', doc: '等于', score: 900 },
+            { caption: '!=', value: '!=', meta: 'operator', doc: '不等于', score: 900 },
+            { caption: '>', value: '>', meta: 'operator', doc: '大于', score: 900 },
+            { caption: '<', value: '<', meta: 'operator', doc: '小于', score: 900 },
+            { caption: '>=', value: '>=', meta: 'operator', doc: '大于等于', score: 900 },
+            { caption: '<=', value: '<=', meta: 'operator', doc: '小于等于', score: 900 },
+            { caption: 'LIKE', value: 'LIKE', meta: 'operator', doc: '模糊匹配', score: 850 },
+            { caption: 'IN', value: 'IN', meta: 'operator', doc: '在列表中', score: 850 },
+            { caption: 'BETWEEN', value: 'BETWEEN', meta: 'operator', doc: '在范围内', score: 850 },
+            { caption: 'IS NULL', value: 'IS NULL', meta: 'operator', doc: '为空', score: 800 },
+            { caption: 'IS NOT NULL', value: 'IS NOT NULL', meta: 'operator', doc: '不为空', score: 800 },
+            { caption: 'AND', value: 'AND', meta: 'logical', doc: '并且', score: 950 },
+            { caption: 'OR', value: 'OR', meta: 'logical', doc: '或者', score: 950 },
+            { caption: 'NOT', value: 'NOT', meta: 'logical', doc: '非', score: 950 },
+            { caption: 'EXISTS', value: 'EXISTS', meta: 'operator', doc: '存在', score: 800 }
+        ];
+    }
+
+    return suggestions.filter(s => s.caption.toLowerCase().includes(prefix.toLowerCase()));
+}
+
+// 获取数据库感知的建议
+function getDatabaseAwareSuggestions(prefix, context) {
+    if (!currentDbStructure) return [];
+
+    let suggestions = [];
+
+    // 表名建议
+    if (context.clauseType === 'FROM' || context.clauseType === 'JOIN') {
+        const tableNames = Object.keys(currentDbStructure.tables);
+        tableNames.forEach(tableName => {
+            if (tableName.toLowerCase().includes(prefix.toLowerCase())) {
+                suggestions.push({
+                    caption: tableName,
+                    value: tableName,
+                    meta: 'table',
+                    doc: `表: ${tableName}`,
+                    score: 1000
+                });
+            }
+        });
+    }
+
+    // 字段名建议
+    if (context.clauseType === 'SELECT' || context.clauseType === 'WHERE') {
+        Object.keys(currentDbStructure.tables).forEach(tableName => {
+            const columns = currentDbStructure.tables[tableName] || [];
+            columns.forEach(col => {
+                if (col.name.toLowerCase().includes(prefix.toLowerCase())) {
+                    suggestions.push({
+                        caption: col.name,
+                        value: col.name,
+                        meta: 'column',
+                        doc: `${col.name} (${col.type})`,
+                        score: 900
+                    });
+                }
+            });
+        });
+    }
+
+    return suggestions;
+}
+
+// 带代码片段的通用SQL建议
+function getGeneralSQLSuggestionsWithSnippets(prefix, context) {
+    const keywords = [
+        'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET',
+        'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'JOIN', 'INNER',
+        'LEFT', 'RIGHT', 'FULL', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING',
+        'LIMIT', 'OFFSET', 'UNION', 'DISTINCT', 'AND', 'OR', 'NOT', 'IN', 'LIKE',
+        'BETWEEN', 'IS', 'NULL', 'AS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+        'EXISTS', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'WITH'
+    ];
+
+    return keywords
+        .filter(keyword => keyword.toLowerCase().includes(prefix.toLowerCase()))
+        .map(keyword => ({
+            caption: keyword,
+            value: keyword,
+            meta: 'keyword',
+            score: 800
+        }));
+}
+
+// 设置增强的SQL自动补全
+function setupEnhancedSQLAutocompletion() {
+    if (!sqlEditor) return;
+
+    console.log('设置增强的SQL自动补全');
+
+    // 创建代码片段管理器
+    const snippetManager = {
+        getSnippets: function() {
+            return Object.keys(sqlSnippets).map(key => ({
+                caption: sqlSnippets[key].prefix,
+                snippet: sqlSnippets[key].body,
+                meta: 'snippet',
+                description: sqlSnippets[key].description
+            }));
+        },
+
+        expandSnippet: function(prefix) {
+            const snippet = Object.values(sqlSnippets).find(s => s.prefix === prefix);
+            return snippet ? snippet.body : null;
+        }
+    };
+
+    // 增强的SQL补全器
+    const enhancedSQLCompleter = {
+        getCompletions: function(editor, session, pos, prefix, callback) {
+            const line = session.getLine(pos.row);
+            const textBeforeCursor = line.substring(0, pos.column);
+            const context = analyzeEnhancedSQLContext(textBeforeCursor, pos.column);
+
+            let suggestions = [];
+
+            // 根据上下文获取不同类型的建议
+            if (context.isSnippetTrigger) {
+                // 代码片段建议
+                suggestions = snippetManager.getSnippets().filter(snippet =>
+                    snippet.caption.toLowerCase().includes(prefix.toLowerCase())
+                );
+            } else if (context.statementType === 'SELECT') {
+                suggestions = getEnhancedSelectSuggestions(prefix, context);
+            } else {
+                suggestions = getGeneralSQLSuggestionsWithSnippets(prefix, context);
+            }
+
+            // 添加数据库结构相关的建议
+            if (currentDbStructure) {
+                const dbSuggestions = getDatabaseAwareSuggestions(prefix, context);
+                suggestions = suggestions.concat(dbSuggestions);
+            }
+
+            callback(null, suggestions);
+        }
+    };
+
+    // 替换现有的SQL补全器
+    const existingCompleters = sqlEditor.completers || [];
+    const nonSQLCompleters = existingCompleters.filter(c => {
+        return c.getCompletions.toString().indexOf('analyzeSQLContext') === -1;
+    });
+
+    sqlEditor.completers = [...nonSQLCompleters, enhancedSQLCompleter];
+
+    // 启用代码片段功能
+    sqlEditor.setOptions({
+        enableBasicAutocompletion: true,
+        enableLiveAutocompletion: true,
+        enableSnippets: true,
+        liveAutocompletionDelay: 200,
+        liveAutocompletionThreshold: 2
+    });
+
+    console.log('增强的SQL自动补全设置完成');
+}
+
+// 在SQL模式切换时使用增强的自动补全
+function useEnhancedSQLAutocompletion() {
+    setupEnhancedSQLAutocompletion();
+}
+
+// ========== 数据库备份和恢复功能 ==========
+
+// 备份历史记录
+let backupHistory = [];
+
+// 初始化备份功能
+function initBackupRestore() {
+    loadBackupHistory();
+    updateDatabaseSelects();
+}
+
+// 更新备份选项
+function updateBackupOptions() {
+    const backupType = document.getElementById('backupType').value;
+    const customOptions = document.getElementById('customBackupOptions');
+
+    if (backupType === 'custom') {
+        customOptions.style.display = 'block';
+    } else {
+        customOptions.style.display = 'none';
+    }
+}
+
+// 更新数据库选择器
+function updateDatabaseSelects() {
+    if (!currentConnectionId) return;
+
+    // 获取数据库列表
+    fetch(`/api/databases/${currentConnectionId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                updateSelectOptions('backupTarget', data.databases);
+                updateSelectOptions('restoreTarget', data.databases);
+            }
+        })
+        .catch(error => {
+            console.error('获取数据库列表失败:', error);
+        });
+}
+
+// 更新选择器选项
+function updateSelectOptions(selectId, options) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    // 保存当前选中的值
+    const currentValue = select.value;
+
+    // 清空选项，保留第一个默认选项
+    select.innerHTML = select.innerHTML.split('</option>')[0] + '</option>';
+
+    // 添加新选项
+    options.forEach(option => {
+        const optionElement = document.createElement('option');
+        optionElement.value = option;
+        optionElement.textContent = option;
+        select.appendChild(optionElement);
+    });
+
+    // 恢复之前选中的值
+    if (currentValue && options.includes(currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+// 创建备份
+function createBackup() {
+    if (!currentConnectionId) {
+        showAlert('请先连接数据库', 'warning');
+        return;
+    }
+
+    const backupType = document.getElementById('backupType').value;
+    const backupFormat = document.getElementById('backupFormat').value;
+    const backupFileName = document.getElementById('backupFileName').value || generateBackupFileName();
+    const backupTarget = Array.from(document.getElementById('backupTarget').selectedOptions).map(option => option.value);
+
+    const backupConfig = {
+        type: backupType,
+        format: backupFormat,
+        fileName: backupFileName,
+        targets: backupTarget,
+        includeData: backupType === 'full' || backupType === 'data' ||
+                     (backupType === 'custom' && document.getElementById('backupIncludeData').checked),
+        includeStructure: backupType === 'full' || backupType === 'structure' ||
+                         (backupType === 'custom' && document.getElementById('backupIncludeStructure').checked),
+        includeTriggers: backupType === 'custom' && document.getElementById('backupIncludeTriggers').checked
+    };
+
+    // 显示进度提示
+    showProgress('正在创建备份...', 'backup');
+
+    fetch(`/api/backup/${currentConnectionId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(backupConfig)
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideProgress('backup');
+
+        if (data.success) {
+            // 添加到备份历史
+            addToBackupHistory({
+                id: Date.now(),
+                timestamp: new Date().toISOString(),
+                type: backupType,
+                format: backupFormat,
+                targets: backupTarget,
+                fileName: backupFileName,
+                fileSize: data.fileSize || 0,
+                status: 'completed',
+                filePath: data.filePath
+            });
+
+            showAlert('备份创建成功！', 'success');
+
+            // 下载备份文件
+            if (data.downloadUrl) {
+                window.open(data.downloadUrl, '_blank');
+            }
+        } else {
+            showAlert('备份创建失败: ' + data.error, 'danger');
+        }
+    })
+    .catch(error => {
+        hideProgress('backup');
+        console.error('备份失败:', error);
+        showAlert('备份创建失败: ' + error.message, 'danger');
+    });
+}
+
+// 生成备份文件名
+function generateBackupFileName() {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+    return `backup_${dateStr}_${timeStr}`;
+}
+
+// 恢复数据库
+function restoreDatabase() {
+    if (!currentConnectionId) {
+        showAlert('请先连接数据库', 'warning');
+        return;
+    }
+
+    const restoreFile = document.getElementById('restoreFile').files[0];
+    if (!restoreFile) {
+        showAlert('请选择备份文件', 'warning');
+        return;
+    }
+
+    const restoreMode = document.getElementById('restoreMode').value;
+    const restoreTarget = document.getElementById('restoreTarget').value;
+
+    const restoreConfig = {
+        mode: restoreMode,
+        target: restoreTarget,
+        ignoreErrors: document.getElementById('restoreIgnoreErrors').checked,
+        dropExisting: document.getElementById('restoreDropExisting').checked,
+        disableConstraints: document.getElementById('restoreDisableConstraints').checked
+    };
+
+    // 显示进度条
+    const progressBar = document.querySelector('#restoreProgress .progress-bar');
+    const progressContainer = document.getElementById('restoreProgress');
+    progressContainer.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('backupFile', restoreFile);
+    formData.append('config', JSON.stringify(restoreConfig));
+
+    fetch(`/api/restore/${currentConnectionId}`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        // 模拟进度更新
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            progress += Math.random() * 20;
+            if (progress > 90) progress = 90;
+            progressBar.style.width = progress + '%';
+            progressBar.textContent = Math.round(progress) + '%';
+        }, 500);
+
+        return response.json().then(data => {
+            clearInterval(progressInterval);
+            progressBar.style.width = '100%';
+            progressBar.textContent = '100%';
+
+            setTimeout(() => {
+                progressContainer.style.display = 'none';
+                progressBar.style.width = '0%';
+                progressBar.textContent = '';
+            }, 2000);
+
+            return data;
+        });
+    })
+    .then(data => {
+        if (data.success) {
+            showAlert('数据库恢复成功！', 'success');
+
+            // 添加到备份历史
+            addToBackupHistory({
+                id: Date.now(),
+                timestamp: new Date().toISOString(),
+                type: 'restore',
+                format: 'restore',
+                targets: [restoreTarget],
+                fileName: restoreFile.name,
+                fileSize: restoreFile.size,
+                status: 'completed',
+                restoreMode: restoreMode
+            });
+
+            // 刷新数据库结构
+            if (typeof loadDatabaseStructure === 'function') {
+                loadDatabaseStructure();
+            }
+        } else {
+            showAlert('数据库恢复失败: ' + data.error, 'danger');
+        }
+    })
+    .catch(error => {
+        progressContainer.style.display = 'none';
+        console.error('恢复失败:', error);
+        showAlert('数据库恢复失败: ' + error.message, 'danger');
+    });
+}
+
+// 预览恢复内容
+function previewRestore() {
+    const restoreFile = document.getElementById('restoreFile').files[0];
+    if (!restoreFile) {
+        showAlert('请选择备份文件', 'warning');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('backupFile', restoreFile);
+
+    showProgress('正在分析备份文件...', 'restore');
+
+    fetch(`/api/restore/preview/${currentConnectionId}`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideProgress('restore');
+
+        if (data.success) {
+            showRestorePreview(data.preview);
+        } else {
+            showAlert('预览失败: ' + data.error, 'danger');
+        }
+    })
+    .catch(error => {
+        hideProgress('restore');
+        console.error('预览失败:', error);
+        showAlert('预览失败: ' + error.message, 'danger');
+    });
+}
+
+// 显示恢复预览
+function showRestorePreview(preview) {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.innerHTML = `
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">恢复预览</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>基本信息</h6>
+                            <p><strong>文件类型:</strong> ${preview.fileType}</p>
+                            <p><strong>数据库版本:</strong> ${preview.databaseVersion || '未知'}</p>
+                            <p><strong>创建时间:</strong> ${preview.createTime || '未知'}</p>
+                            <p><strong>预计恢复时间:</strong> ${preview.estimatedTime || '未知'}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>统计信息</h6>
+                            <p><strong>表数量:</strong> ${preview.tableCount || 0}</p>
+                            <p><strong>总记录数:</strong> ${preview.totalRecords || 0}</p>
+                            <p><strong>文件大小:</strong> ${formatFileSize(preview.fileSize || 0)}</p>
+                        </div>
+                    </div>
+                    <div class="row mt-3">
+                        <div class="col-12">
+                            <h6>包含的表</h6>
+                            <div class="table-responsive">
+                                <table class="table table-striped table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>表名</th>
+                                            <th>记录数</th>
+                                            <th>大小</th>
+                                            <th>状态</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${(preview.tables || []).map(table => `
+                                            <tr>
+                                                <td>${table.name}</td>
+                                                <td>${table.recordCount || 0}</td>
+                                                <td>${formatFileSize(table.size || 0)}</td>
+                                                <td><span class="badge bg-success">可恢复</span></td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="restoreDatabase(); bootstrap.Modal.getInstance(this.closest('.modal')).hide();">
+                        开始恢复
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
+
+    modal.addEventListener('hidden.bs.modal', () => {
+        document.body.removeChild(modal);
+    });
+}
+
+// 定时备份
+function scheduleBackup() {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.innerHTML = `
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">定时备份设置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">备份频率</label>
+                        <select class="form-select" id="scheduleFrequency">
+                            <option value="daily">每天</option>
+                            <option value="weekly">每周</option>
+                            <option value="monthly">每月</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备份时间</label>
+                        <input type="time" class="form-control" id="scheduleTime" value="02:00">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">保留份数</label>
+                        <input type="number" class="form-control" id="scheduleRetention" value="7" min="1" max="30">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备份类型</label>
+                        <select class="form-select" id="scheduleType">
+                            <option value="full">完整备份</option>
+                            <option value="structure">仅结构</option>
+                            <option value="data">仅数据</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveBackupSchedule(); bootstrap.Modal.getInstance(this.closest('.modal')).hide();">
+                        保存设置
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
+
+    modal.addEventListener('hidden.bs.modal', () => {
+        document.body.removeChild(modal);
+    });
+}
+
+// 保存备份计划
+function saveBackupSchedule() {
+    const schedule = {
+        frequency: document.getElementById('scheduleFrequency').value,
+        time: document.getElementById('scheduleTime').value,
+        retention: parseInt(document.getElementById('scheduleRetention').value),
+        type: document.getElementById('scheduleType').value,
+        connectionId: currentConnectionId
+    };
+
+    fetch('/api/backup/schedule', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(schedule)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showAlert('定时备份设置已保存', 'success');
+        } else {
+            showAlert('保存失败: ' + data.error, 'danger');
+        }
+    })
+    .catch(error => {
+        console.error('保存定时备份失败:', error);
+        showAlert('保存失败: ' + error.message, 'danger');
+    });
+}
+
+// 添加到备份历史
+function addToBackupHistory(backup) {
+    backupHistory.unshift(backup);
+
+    // 限制历史记录数量
+    if (backupHistory.length > 100) {
+        backupHistory = backupHistory.slice(0, 100);
+    }
+
+    // 保存到本地存储
+    localStorage.setItem('backupHistory', JSON.stringify(backupHistory));
+
+    // 更新显示
+    updateBackupHistoryDisplay();
+}
+
+// 加载备份历史
+function loadBackupHistory() {
+    const saved = localStorage.getItem('backupHistory');
+    if (saved) {
+        try {
+            backupHistory = JSON.parse(saved);
+        } catch (error) {
+            console.error('加载备份历史失败:', error);
+            backupHistory = [];
+        }
+    }
+    updateBackupHistoryDisplay();
+}
+
+// 更新备份历史显示
+function updateBackupHistoryDisplay() {
+    const tbody = document.querySelector('#backupHistoryTable tbody');
+    if (!tbody) return;
+
+    if (backupHistory.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无备份记录</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = backupHistory.map(backup => `
+        <tr>
+            <td>${formatDateTime(backup.timestamp)}</td>
+            <td>${getBackupTypeLabel(backup.type)}</td>
+            <td>${backup.targets.join(', ')}</td>
+            <td>${formatFileSize(backup.fileSize)}</td>
+            <td>${getStatusBadge(backup.status)}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    ${backup.filePath ? `<button class="btn btn-outline-primary" onclick="downloadBackup('${backup.filePath}')" title="下载">
+                        <i class="fas fa-download"></i>
+                    </button>` : ''}
+                    <button class="btn btn-outline-danger" onclick="deleteBackup(${backup.id})" title="删除">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// 下载备份
+function downloadBackup(filePath) {
+    window.open(`/api/backup/download/${encodeURIComponent(filePath)}`, '_blank');
+}
+
+// 删除备份记录
+function deleteBackup(backupId) {
+    if (!confirm('确定要删除这条备份记录吗？')) return;
+
+    backupHistory = backupHistory.filter(backup => backup.id !== backupId);
+    localStorage.setItem('backupHistory', JSON.stringify(backupHistory));
+    updateBackupHistoryDisplay();
+
+    showAlert('备份记录已删除', 'info');
+}
+
+// 刷新备份历史
+function refreshBackupHistory() {
+    loadBackupHistory();
+    showAlert('备份历史已刷新', 'info');
+}
+
+// 清理旧备份
+function cleanupOldBackups() {
+    if (!confirm('确定要清理30天前的备份记录吗？')) return;
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const originalCount = backupHistory.length;
+    backupHistory = backupHistory.filter(backup =>
+        new Date(backup.timestamp) > thirtyDaysAgo
+    );
+
+    const deletedCount = originalCount - backupHistory.length;
+    localStorage.setItem('backupHistory', JSON.stringify(backupHistory));
+    updateBackupHistoryDisplay();
+
+    showAlert(`已清理 ${deletedCount} 条旧备份记录`, 'info');
+}
+
+// 辅助函数
+function getBackupTypeLabel(type) {
+    const labels = {
+        'full': '完整备份',
+        'structure': '仅结构',
+        'data': '仅数据',
+        'custom': '自定义',
+        'restore': '恢复操作'
+    };
+    return labels[type] || type;
+}
+
+function getStatusBadge(status) {
+    const badges = {
+        'completed': '<span class="badge bg-success">已完成</span>',
+        'failed': '<span class="badge bg-danger">失败</span>',
+        'running': '<span class="badge bg-warning">进行中</span>',
+        'scheduled': '<span class="badge bg-info">已计划</span>'
+    };
+    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatDateTime(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleString('zh-CN');
+}
+
+// 显示进度提示
+function showProgress(message, type = 'backup') {
+    const progressDiv = document.createElement('div');
+    progressDiv.id = `${type}Progress`;
+    progressDiv.className = 'position-fixed top-0 start-50 translate-middle-x mt-3';
+    progressDiv.style.zIndex = '9999';
+    progressDiv.innerHTML = `
+        <div class="alert alert-info d-flex align-items-center" role="alert">
+            <div class="spinner-border spinner-border-sm me-2" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div>${message}</div>
+        </div>
+    `;
+    document.body.appendChild(progressDiv);
+}
+
+// 隐藏进度提示
+function hideProgress(type = 'backup') {
+    const progressDiv = document.getElementById(`${type}Progress`);
+    if (progressDiv) {
+        document.body.removeChild(progressDiv);
+    }
+}
+
+// 显示提示消息
+function showAlert(message, type = 'info') {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 end-0 m-3`;
+    alertDiv.style.zIndex = '9999';
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    document.body.appendChild(alertDiv);
+
+    // 自动隐藏
+    setTimeout(() => {
+        if (alertDiv.parentNode) {
+            alertDiv.parentNode.removeChild(alertDiv);
+        }
+    }, 5000);
+}
+
+// ========== 文件结束 ==========
+
+// ========== 用户权限管理 ==========
+
+// 用户数据存储
+let users = [
+    {
+        id: 1,
+        username: 'admin',
+        email: 'admin@example.com',
+        role: 'admin',
+        status: 'active',
+        lastLogin: '2025-09-26T10:30:00Z',
+        createdAt: '2025-09-01T00:00:00Z',
+        databasePermissions: {}
+    }
+];
+
+// 角色权限配置
+const rolePermissions = {
+    admin: {
+        name: '管理员',
+        description: '完全系统访问权限',
+        permissions: {
+            'database:read': true, 'database:write': true, 'database:delete': true, 'database:create': true,
+            'database:backup': true, 'database:restore': true, 'table:read': true, 'table:write': true,
+            'table:delete': true, 'table:create': true, 'table:alter': true, 'table:truncate': true,
+            'data:select': true, 'data:insert': true, 'data:update': true, 'data:delete': true,
+            'data:export': true, 'data:import': true, 'user:read': true, 'user:create': true,
+            'user:update': true, 'user:delete': true, 'user:manage_permissions': true, 'system:settings': true,
+            'system:logs': true, 'system:monitor': true, 'system:backup': true, 'sql:execute': true,
+            'sql:save': true, 'sql:history': true, 'sql:format': true
+        }
+    },
+    developer: {
+        name: '开发者',
+        description: '开发和测试权限',
+        permissions: {
+            'database:read': true, 'database:write': true, 'database:create': true, 'table:read': true,
+            'table:write': true, 'table:create': true, 'table:alter': true, 'data:select': true,
+            'data:insert': true, 'data:update': true, 'data:delete': true, 'data:export': true,
+            'data:import': true, 'sql:execute': true, 'sql:save': true, 'sql:history': true,
+            'sql:format': true, 'system:logs': true
+        }
+    },
+    analyst: {
+        name: '分析师',
+        description: '数据分析和查询权限',
+        permissions: {
+            'database:read': true, 'table:read': true, 'data:select': true, 'data:export': true,
+            'sql:execute': true, 'sql:history': true, 'sql:format': true, 'system:logs': true
+        }
+    },
+    viewer: {
+        name: '查看者',
+        description: '只读访问权限',
+        permissions: {
+            'database:read': true, 'table:read': true, 'data:select': true, 'data:export': true,
+            'sql:execute': true, 'sql:history': true
+        }
+    }
+};
+
+// 审计日志存储
+let auditLogs = [];
+
+// 显示添加用户模态框
+function showAddUserModal() {
+    const modalHtml = `
+        <div class="modal fade" id="addUserModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">添加新用户</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="addUserForm">
+                            <div class="mb-3">
+                                <label class="form-label">用户名 <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="newUsername" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">邮箱 <span class="text-danger">*</span></label>
+                                <input type="email" class="form-control" id="newUserEmail" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">密码 <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="newUserPassword" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">角色 <span class="text-danger">*</span></label>
+                                <select class="form-select" id="newUserRole" required>
+                                    <option value="">选择角色</option>
+                                    <option value="admin">管理员</option>
+                                    <option value="developer">开发者</option>
+                                    <option value="analyst">分析师</option>
+                                    <option value="viewer">查看者</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="newUserActive" checked>
+                                    <label class="form-check-label" for="newUserActive">激活用户</label>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" onclick="addUser()">添加用户</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    const existingModal = document.getElementById('addUserModal');
+    if (existingModal) existingModal.remove();
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modal = new bootstrap.Modal(document.getElementById('addUserModal'));
+    modal.show();
+}
+
+// 添加用户
+function addUser() {
+    const username = document.getElementById('newUsername').value.trim();
+    const email = document.getElementById('newUserEmail').value.trim();
+    const password = document.getElementById('newUserPassword').value;
+    const role = document.getElementById('newUserRole').value;
+    const active = document.getElementById('newUserActive').checked;
+
+    if (!username || !email || !password || !role) {
+        showAlert('请填写所有必填字段', 'warning');
+        return;
+    }
+
+    if (users.find(u => u.username === username)) {
+        showAlert('用户名已存在', 'warning');
+        return;
+    }
+
+    if (users.find(u => u.email === email)) {
+        showAlert('邮箱已存在', 'warning');
+        return;
+    }
+
+    const newUser = {
+        id: Date.now(),
+        username, email, role,
+        status: active ? 'active' : 'inactive',
+        lastLogin: null,
+        createdAt: new Date().toISOString(),
+        databasePermissions: {}
+    };
+
+    users.push(newUser);
+    addAuditLog('create', 'user', `创建用户: ${username}`, null, 'success');
+    localStorage.setItem('users', JSON.stringify(users));
+
+    const modal = bootstrap.Modal.getInstance(document.getElementById('addUserModal'));
+    modal.hide();
+    loadUsers();
+    showAlert('用户添加成功', 'success');
+}
+
+// 加载用户列表
+function loadUsers() {
+    const tbody = document.querySelector('#usersTable tbody');
+    if (!tbody) return;
+
+    const searchTerm = document.getElementById('userSearch')?.value.toLowerCase() || '';
+    const roleFilter = document.getElementById('roleFilter')?.value || '';
+
+    let filteredUsers = users.filter(user => {
+        const matchesSearch = !searchTerm || user.username.toLowerCase().includes(searchTerm) || user.email.toLowerCase().includes(searchTerm);
+        const matchesRole = !roleFilter || user.role === roleFilter;
+        return matchesSearch && matchesRole;
+    });
+
+    tbody.innerHTML = filteredUsers.map(user => `
+        <tr>
+            <td>${user.username}</td>
+            <td><span class="badge bg-${getRoleBadgeColor(user.role)}">${rolePermissions[user.role]?.name || user.role}</span></td>
+            <td>${user.email}</td>
+            <td><span class="badge bg-${user.status === 'active' ? 'success' : 'secondary'}">${user.status === 'active' ? '激活' : '禁用'}</span></td>
+            <td>${user.lastLogin ? new Date(user.lastLogin).toLocaleString('zh-CN') : '从未登录'}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" onclick="editUser(${user.id})" title="编辑"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-outline-warning" onclick="toggleUserStatus(${user.id})" title="${user.status === 'active' ? '禁用' : '激活'}"><i class="fas fa-${user.status === 'active' ? 'ban' : 'check'}"></i></button>
+                    <button class="btn btn-outline-danger" onclick="deleteUser(${user.id})" title="删除"><i class="fas fa-trash"></i></button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+
+    updateUserSelectors();
+}
+
+// 获取角色徽章颜色
+function getRoleBadgeColor(role) {
+    const colors = { admin: 'danger', developer: 'primary', analyst: 'info', viewer: 'secondary' };
+    return colors[role] || 'secondary';
+}
+
+// 编辑用户
+function editUser(userId) {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+
+    const modalHtml = `
+        <div class="modal fade" id="editUserModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">编辑用户: ${user.username}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="editUserForm">
+                            <div class="mb-3">
+                                <label class="form-label">用户名</label>
+                                <input type="text" class="form-control" value="${user.username}" readonly>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">邮箱</label>
+                                <input type="email" class="form-control" id="editUserEmail" value="${user.email}">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">角色</label>
+                                <select class="form-select" id="editUserRole">
+                                    <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>管理员</option>
+                                    <option value="developer" ${user.role === 'developer' ? 'selected' : ''}>开发者</option>
+                                    <option value="analyst" ${user.role === 'analyst' ? 'selected' : ''}>分析师</option>
+                                    <option value="viewer" ${user.role === 'viewer' ? 'selected' : ''}>查看者</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="editUserActive" ${user.status === 'active' ? 'checked' : ''}>
+                                    <label class="form-check-label" for="editUserActive">激活用户</label>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">新密码 (留空不修改)</label>
+                                <input type="password" class="form-control" id="editUserPassword">
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" onclick="updateUser(${userId})">更新用户</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    const existingModal = document.getElementById('editUserModal');
+    if (existingModal) existingModal.remove();
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modal = new bootstrap.Modal(document.getElementById('editUserModal'));
+    modal.show();
+}
+
+// 更新用户
+function updateUser(userId) {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+
+    const email = document.getElementById('editUserEmail').value.trim();
+    const role = document.getElementById('editUserRole').value;
+    const active = document.getElementById('editUserActive').checked;
+    const password = document.getElementById('editUserPassword').value;
+
+    if (!email || !role) {
+        showAlert('请填写所有必填字段', 'warning');
+        return;
+    }
+
+    if (users.find(u => u.email === email && u.id !== userId)) {
+        showAlert('邮箱已被其他用户使用', 'warning');
+        return;
+    }
+
+    const oldRole = user.role;
+    const oldStatus = user.status;
+
+    user.email = email;
+    user.role = role;
+    user.status = active ? 'active' : 'inactive';
+
+    if (password) console.log('密码已更新');
+
+    const changes = [];
+    if (oldRole !== role) changes.push(`角色: ${oldRole} → ${role}`);
+    if (oldStatus !== user.status) changes.push(`状态: ${oldStatus} → ${user.status}`);
+    if (changes.length > 0) {
+        addAuditLog('update', 'user', `更新用户 ${user.username}: ${changes.join(', ')}`, null, 'success');
+    }
+
+    localStorage.setItem('users', JSON.stringify(users));
+
+    const modal = bootstrap.Modal.getInstance(document.getElementById('editUserModal'));
+    modal.hide();
+    loadUsers();
+    showAlert('用户更新成功', 'success');
+}
+
+// 切换用户状态
+function toggleUserStatus(userId) {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+
+    const newStatus = user.status === 'active' ? 'inactive' : 'active';
+    const action = newStatus === 'active' ? '激活' : '禁用';
+
+    if (confirm(`确定要${action}用户 "${user.username}" 吗？`)) {
+        user.status = newStatus;
+        addAuditLog('update', 'user', `${action}用户: ${user.username}`, null, 'success');
+        localStorage.setItem('users', JSON.stringify(users));
+        loadUsers();
+        showAlert(`用户已${action}`, 'success');
+    }
+}
+
+// 删除用户
+function deleteUser(userId) {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+
+    if (confirm(`确定要删除用户 "${user.username}" 吗？此操作不可恢复。`)) {
+        users = users.filter(u => u.id !== userId);
+        addAuditLog('delete', 'user', `删除用户: ${user.username}`, null, 'success');
+        localStorage.setItem('users', JSON.stringify(users));
+        loadUsers();
+        showAlert('用户删除成功', 'success');
+    }
+}
+
+// 过滤用户
+function filterUsers() {
+    loadUsers();
+}
+
+// 更新用户选择器
+function updateUserSelectors() {
+    const userSelect = document.getElementById('userDatabasePermissions');
+    const auditUserFilter = document.getElementById('auditUserFilter');
+
+    if (userSelect) {
+        const currentValue = userSelect.value;
+        userSelect.innerHTML = '<option value="">选择用户</option>' + users.map(user => `<option value="${user.id}">${user.username}</option>`).join('');
+        userSelect.value = currentValue;
+    }
+
+    if (auditUserFilter) {
+        const currentValue = auditUserFilter.value;
+        auditUserFilter.innerHTML = '<option value="">所有用户</option>' + users.map(user => `<option value="${user.id}">${user.username}</option>`).join('');
+        auditUserFilter.value = currentValue;
+    }
+}
+
+// 初始化用户权限管理
+function initializeUserManagement() {
+    const savedUsers = localStorage.getItem('users');
+    if (savedUsers) {
+        try { users = JSON.parse(savedUsers); } catch (error) { console.error('Error loading users:', error); }
+    }
+
+    const savedLogs = localStorage.getItem('auditLogs');
+    if (savedLogs) {
+        try { auditLogs = JSON.parse(savedLogs); } catch (error) { console.error('Error loading audit logs:', error); }
+    }
+
+    loadUsers();
+}
+
+// 页面加载完成后初始化用户管理
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => { initializeUserManagement(); }, 1000);
+});
+
