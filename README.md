@@ -55,7 +55,7 @@ A powerful web-based database management tool similar to DBeaver, supporting mul
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd mcp-anything
+cd dms
 
 # Install dependencies
 npm install
@@ -241,7 +241,7 @@ GET /api/export/{connectionId}/{database}/{table}?format=csv
 ## 📁 Project Structure
 
 ```
-mcp-anything/
+dms/
 ├── config/                    # Configuration files
 │   └── database.js           # Database configuration
 ├── middleware/               # Express middleware
@@ -346,7 +346,7 @@ tail -f logs/combined.log
 npm install -g pm2
 
 # Start application
-pm2 start server.js --name "mcp-anything"
+pm2 start server.js --name "dms"
 
 # Configure PM2 for production
 pm2 startup
@@ -356,7 +356,7 @@ pm2 save
 pm2 monit
 
 # View logs
-pm2 logs mcp-anything
+pm2 logs dms
 ```
 
 ### Docker Deployment
@@ -376,8 +376,8 @@ CMD ["npm", "start"]
 
 ```bash
 # Build and run with Docker
-docker build -t mcp-anything .
-docker run -p 3000:3000 -v $(pwd)/data:/app/data mcp-anything
+docker build -t dms .
+docker run -p 3000:3000 -v $(pwd)/data:/app/data dms
 ```
 
 ### Nginx Reverse Proxy
